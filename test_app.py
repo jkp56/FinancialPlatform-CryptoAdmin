@@ -1,0 +1,270 @@
+import io
+import re
+import sqlite3
+import unittest
+import urllib.parse
+from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+from wsgiref.util import setup_testing_defaults
+
+import db
+from app import application, crypto_amount, pnl_chart, run_server
+from calculations import build_ledger
+
+
+def tx(
+    transaction_id,
+    tx_date,
+    asset,
+    kind,
+    amount=0,
+    eur=0,
+    fee=0,
+    cost=0,
+    description="",
+):
+    return {
+        "id": transaction_id,
+        "tx_date": tx_date,
+        "asset": asset,
+        "type": kind,
+        "description": description,
+        "asset_amount": amount,
+        "eur_gross": eur,
+        "fee_eur": fee,
+        "transferred_cost_basis_eur": cost,
+    }
+
+
+class CryptoAdminTest(unittest.TestCase):
+    def post(self, path, data):
+        payload = urllib.parse.urlencode(data).encode()
+        environ = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            {
+                "REQUEST_METHOD": "POST",
+                "PATH_INFO": path,
+                "CONTENT_LENGTH": str(len(payload)),
+                "wsgi.input": io.BytesIO(payload),
+            }
+        )
+        response = {}
+        body = b"".join(
+            application(
+                environ,
+                lambda status, headers: response.update(status=status, headers=headers),
+            )
+        )
+        return response["status"], body.decode()
+
+    def get(self, path):
+        environ = {}
+        setup_testing_defaults(environ)
+        environ["PATH_INFO"] = path
+        response = {}
+        body = b"".join(
+            application(
+                environ,
+                lambda status, headers: response.update(status=status, headers=headers),
+            )
+        )
+        return response["status"], body.decode()
+
+    def test_health_endpoint_does_not_require_database(self):
+        status, body = self.get("/healthz")
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(body, "ok")
+
+    def test_transaction_crud_for_eth(self):
+        values = {
+            "tx_date": "2026-07-20",
+            "asset": "ETH",
+            "type": "Inkoop",
+            "description": "ETH aankoop",
+            "asset_amount": "0.025",
+            "eur_gross": "75",
+            "fee_eur": "0.50",
+            "transferred_cost_basis_eur": "0",
+        }
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            transaction_id = db.create_transaction(values)
+            self.assertEqual(db.get_transaction(transaction_id)["asset"], "ETH")
+            corrected = {**values, "description": "Gecorrigeerd", "fee_eur": "0.40"}
+            self.assertTrue(db.update_transaction(transaction_id, corrected))
+            self.assertEqual(db.get_transaction(transaction_id)["description"], "Gecorrigeerd")
+            self.assertTrue(db.delete_transaction(transaction_id))
+            self.assertIsNone(db.get_transaction(transaction_id))
+
+    def test_legacy_database_is_backed_up_and_migrated_to_btc(self):
+        with TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "legacy.sqlite3"
+            con = sqlite3.connect(database)
+            con.executescript(
+                """
+                CREATE TABLE transactions(
+                  id INTEGER PRIMARY KEY, tx_date TEXT, type TEXT, description TEXT,
+                  btc_amount NUMERIC, eur_gross NUMERIC, fee_eur NUMERIC,
+                  transferred_cost_basis_eur NUMERIC, created_at TEXT
+                );
+                CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);
+                INSERT INTO transactions VALUES
+                  (1,'2026-07-01','BTC Inkoop','Oud',0.001,50,0.5,0,''),
+                  (2,'2026-07-02','EUR Storting','EUR',0,25,0,0,'');
+                INSERT INTO settings VALUES ('price','56000','');
+                INSERT INTO settings VALUES ('manual_price','55000','');
+                """
+            )
+            con.commit()
+            con.close()
+            with patch.object(db, "DB_PATH", database):
+                db.init_db()
+                rows = db.get_transactions()
+                self.assertTrue(database.with_name("crypto_admin.pre_multi_asset.sqlite3").exists())
+                self.assertEqual(rows[0]["asset"], "BTC")
+                self.assertEqual(rows[0]["type"], "Inkoop")
+                self.assertEqual(rows[0]["asset_amount"], 0.001)
+                self.assertEqual(rows[1]["asset"], "EUR")
+                self.assertEqual(db.get_settings()["price_BTC"], "56000")
+
+    @patch("app.db.init_db")
+    def test_ctrl_c_stops_server_without_traceback(self, init_db):
+        server = Mock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+        factory = Mock(return_value=server)
+        run_server(factory)
+        init_db.assert_called_once_with()
+        server.server_close.assert_called_once_with()
+
+    def test_small_reward_keeps_precision_for_both_assets(self):
+        transactions = [
+            tx(1, "2026-07-16", "BTC", "Reward", "0.0000002215"),
+            tx(2, "2026-07-16", "ETH", "Reward", "0.000000000123"),
+        ]
+        _, metrics = build_ledger(
+            transactions, Decimal("0"), {"BTC": "57121.85", "ETH": "3000"}
+        )
+        self.assertEqual(metrics["assets"]["BTC"]["balance"], Decimal("0.0000002215"))
+        self.assertEqual(metrics["assets"]["ETH"]["balance"], Decimal("0.000000000123"))
+        self.assertEqual(crypto_amount(metrics["assets"]["BTC"]["balance"]), "0.0000002215")
+
+    def test_purchase_total_includes_fee_per_asset(self):
+        transactions = [
+            tx(1, "2026-07-01", "EUR", "EUR Storting", eur="200"),
+            tx(2, "2026-07-02", "BTC", "Inkoop", "0.001", "50", "0.50"),
+            tx(3, "2026-07-03", "ETH", "Inkoop", "0.025", "75", "0.75"),
+        ]
+        rows, metrics = build_ledger(
+            transactions, Decimal("0"), {"BTC": "56000", "ETH": "3100"}
+        )
+        self.assertEqual(rows[1]["reference_price"], Decimal("49.50") / Decimal("0.001"))
+        self.assertEqual(rows[2]["reference_price"], Decimal("74.25") / Decimal("0.025"))
+        self.assertEqual(metrics["cash"], Decimal("75"))
+        self.assertEqual(metrics["assets"]["BTC"]["cost_basis"], Decimal("50"))
+        self.assertEqual(metrics["assets"]["ETH"]["cost_basis"], Decimal("75"))
+
+    def test_eth_sale_only_changes_eth_cost_basis_and_pnl(self):
+        transactions = [
+            tx(1, "2026-07-01", "BTC", "Storting", "0.001", cost="50"),
+            tx(2, "2026-07-01", "ETH", "Storting", "1", cost="2500"),
+            tx(3, "2026-07-02", "ETH", "Verkoop", "0.25", "800", "2"),
+        ]
+        rows, metrics = build_ledger(
+            transactions, Decimal("0"), {"BTC": "56000", "ETH": "3200"}
+        )
+        sale = rows[2]
+        self.assertEqual(sale["removed_cost_basis"], Decimal("625"))
+        self.assertEqual(sale["pnl_tx"], Decimal("175"))
+        self.assertEqual(metrics["assets"]["ETH"]["balance"], Decimal("0.75"))
+        self.assertEqual(metrics["assets"]["BTC"]["balance"], Decimal("0.001"))
+        self.assertEqual(metrics["realized"], Decimal("175"))
+
+    def test_combined_metrics_equal_sum_of_coin_metrics(self):
+        transactions = [
+            tx(1, "2026-07-01", "BTC", "Storting", "0.001", cost="50"),
+            tx(2, "2026-07-01", "ETH", "Storting", "0.5", cost="1200"),
+        ]
+        _, metrics = build_ledger(
+            transactions, Decimal("10"), {"BTC": "60000", "ETH": "3000"}
+        )
+        btc_metrics = metrics["assets"]["BTC"]
+        eth_metrics = metrics["assets"]["ETH"]
+        self.assertEqual(metrics["market"], btc_metrics["market"] + eth_metrics["market"])
+        self.assertEqual(
+            metrics["total_pnl"], btc_metrics["total_pnl"] + eth_metrics["total_pnl"]
+        )
+        self.assertEqual(metrics["account_value"], metrics["market"] + Decimal("10"))
+
+    def test_seed_reconciles_as_btc_only(self):
+        transactions = [
+            tx(index, row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[3])
+            for index, row in enumerate(db.SEED, 1)
+        ]
+        rows, metrics = build_ledger(
+            transactions, Decimal("0.01"), {"BTC": "57121.85", "ETH": "3000"}
+        )
+        self.assertEqual(metrics["assets"]["BTC"]["balance"], Decimal("0.01275016"))
+        self.assertEqual(metrics["assets"]["ETH"]["balance"], Decimal("0"))
+        self.assertAlmostEqual(float(metrics["cash"]), 25.01, places=8)
+        self.assertFalse([row for row in rows if row["control"]])
+
+    def test_invalid_eth_sale_is_not_saved_and_error_is_shown(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            before = len(db.get_transactions())
+            status, body = self.post(
+                "/transactions",
+                {
+                    "tx_date": "2026-07-20",
+                    "asset": "ETH",
+                    "type": "Verkoop",
+                    "description": "Te veel",
+                    "asset_amount": "1",
+                    "eur_gross": "10",
+                    "fee_eur": "0",
+                },
+            )
+            self.assertEqual(status, "422 Unprocessable Entity")
+            self.assertIn("Onvoldoende ETH", body)
+            self.assertIn('data-validation-error="true"', body)
+            self.assertEqual(len(db.get_transactions()), before)
+
+    def test_deletion_that_breaks_later_purchase_is_blocked(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            status, body = self.post("/delete", {"id": "2"})
+            self.assertEqual(status, "422 Unprocessable Entity")
+            self.assertIn("onvoldoende eur", body.lower())
+            self.assertIsNotNone(db.get_transaction(2))
+
+    def test_chart_uses_dynamic_scale_and_stays_inside_viewbox(self):
+        rows = [
+            {
+                "tx_date": f"2026-07-{index + 1:02d}",
+                "asset": "BTC" if index % 2 == 0 else "ETH",
+                "type": "Inkoop",
+                "historical_total": Decimal(-40 + index * 7),
+            }
+            for index in range(20)
+        ]
+        chart = pnl_chart(rows)
+        points = re.search(r'class="chart-line" points="([^"]+)"', chart).group(1)
+        coordinates = [tuple(map(float, point.split(","))) for point in points.split()]
+        self.assertEqual(len(coordinates), 20)
+        self.assertAlmostEqual(coordinates[0][0], 8)
+        self.assertAlmostEqual(coordinates[-1][0], 992)
+        self.assertTrue(all(8 <= x <= 992 and 8 <= y <= 132 for x, y in coordinates))
+        self.assertIn("Gezamenlijk PnL-verloop", chart)
+
+
+if __name__ == "__main__":
+    unittest.main()

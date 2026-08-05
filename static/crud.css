@@ -1,0 +1,48 @@
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.row-actions form {
+    margin: 0;
+}
+
+.row-actions .icon {
+    border-radius: 6px;
+    line-height: 1;
+}
+
+.row-actions .icon:hover {
+    background: #eaf2f8;
+    color: var(--blue);
+}
+
+.row-actions .danger:hover {
+    background: #fbeaec;
+    color: var(--red);
+}
+
+#eur-help:empty {
+    display: none;
+}
+
+.form-error,
+.page-error {
+    border: 1px solid #efb8be;
+    border-left: 4px solid var(--red);
+    border-radius: 8px;
+    background: #fff1f2;
+    color: #7d2530;
+    padding: 10px 12px;
+}
+
+.form-error {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 10px;
+}
+
+.page-error {
+    margin: -6px 0 12px;
+}

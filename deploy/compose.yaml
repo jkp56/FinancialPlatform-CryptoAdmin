@@ -1,0 +1,35 @@
+services:
+  crypto-admin:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: crypto-admin:local
+    container_name: crypto-admin
+    restart: unless-stopped
+    init: true
+    environment:
+      CRYPTO_ADMIN_HOST: 0.0.0.0
+      CRYPTO_ADMIN_PORT: 8000
+      CRYPTO_ADMIN_DB_PATH: /var/lib/crypto-admin/crypto_admin.sqlite3
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - ../../data:/var/lib/crypto-admin
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 15s

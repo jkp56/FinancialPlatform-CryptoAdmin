@@ -1,0 +1,22 @@
+.metric-breakdown {
+    display: grid !important;
+    gap: 2px;
+}
+
+.metric-breakdown span {
+    display: flex !important;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.metric-breakdown em {
+    font-style: normal;
+}
+
+.metric-breakdown b {
+    color: var(--navy);
+    font-weight: 700;
+    white-space: nowrap;
+}

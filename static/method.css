@@ -1,0 +1,93 @@
+.method-accordion {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.method-card {
+    align-self: start;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 0 2px 9px #15314f0a;
+    overflow: hidden;
+}
+
+.method-card summary {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) 22px;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 14px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.method-card summary::-webkit-details-marker {
+    display: none;
+}
+
+.method-card summary:hover {
+    background: #f6f9fb;
+}
+
+.method-number {
+    color: #8ba7bd;
+    font-weight: 800;
+    font-size: 12px;
+}
+
+.method-title strong,
+.method-title small {
+    display: block;
+}
+
+.method-title strong {
+    color: var(--navy);
+}
+
+.method-title small {
+    color: var(--muted);
+    margin-top: 1px;
+}
+
+.method-toggle {
+    color: var(--blue);
+    font-size: 21px;
+    text-align: center;
+    transition: transform .15s ease;
+}
+
+.method-card[open] .method-toggle {
+    transform: rotate(45deg);
+}
+
+.method-card[open] summary {
+    background: #edf5fa;
+}
+
+.method-detail {
+    border-top: 1px solid var(--line);
+    padding: 12px 14px 14px 54px;
+}
+
+.method-detail p {
+    color: #435667;
+}
+
+.method-note {
+    display: block;
+    padding: 11px 14px;
+    margin-top: 10px;
+}
+
+.method-note p {
+    display: inline;
+    margin-left: 6px;
+}
+
+@media (max-width: 900px) {
+    .method-accordion {
+        grid-template-columns: 1fr;
+    }
+}
