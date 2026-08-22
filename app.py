@@ -254,7 +254,7 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
     )
     reopen = ' data-validation-error="true"' if form_error else ""
     table_rows = []
-    for row in rows:
+    for row in reversed(rows):
         edit_data = esc(
             json.dumps(
                 {

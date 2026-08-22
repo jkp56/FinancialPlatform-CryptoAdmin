@@ -97,6 +97,10 @@ class CryptoAdminTest(unittest.TestCase):
             self.assertIn("− € 50,00", body)
             self.assertIn("+ € 50,00", body)
 
+            newest = body.index('data-asset="BTC" data-type="Verkoop"')
+            oldest = body.index('data-asset="BTC" data-type="Storting"')
+            self.assertLess(newest, oldest)
+
     def test_transaction_crud_for_eth(self):
         values = {
             "tx_date": "2026-07-20",
