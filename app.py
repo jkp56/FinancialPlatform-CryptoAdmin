@@ -3,6 +3,7 @@ import json
 import math
 import mimetypes
 import os
+import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -11,15 +12,21 @@ from pathlib import Path
 from wsgiref.simple_server import make_server
 
 import db
-from calculations import ASSETS, CRYPTO_ACTIONS, build_ledger
+from calculations import CRYPTO_ACTIONS, build_ledger
 
 ROOT = Path(__file__).parent
 TYPES = ["Inkoop", "Verkoop", "Storting", "Opname", "Reward", "EUR Storting", "EUR Opname"]
-KRAKEN_PAIRS = {"BTC": "XBTEUR", "ETH": "ETHEUR"}
 
 
 def money(value):
     return f"€ {float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def signed_money(value):
+    amount = Decimal(str(value or 0))
+    if not amount:
+        return "–"
+    return f'{"+" if amount > 0 else "−"} {money(abs(amount))}'
 
 
 def crypto_amount(value):
@@ -43,7 +50,8 @@ def esc(value):
 def refresh_prices():
     results = {}
     settings = db.get_settings()
-    for asset, pair in KRAKEN_PAIRS.items():
+    for item in db.get_assets():
+        asset, pair = item["symbol"], item["kraken_pair"]
         try:
             url = f"https://api.kraken.com/0/public/Ticker?pair={pair}&assetVersion=1"
             with urllib.request.urlopen(url, timeout=6) as response:
@@ -57,7 +65,7 @@ def refresh_prices():
             db.set_setting(f"price_updated_{asset}", datetime.now(timezone.utc).isoformat())
             results[asset] = True
         except Exception:
-            db.set_setting(f"price_{asset}", settings[f"manual_price_{asset}"])
+            db.set_setting(f"price_{asset}", item["manual_price"])
             db.set_setting(f"price_source_{asset}", "Handmatige terugvalprijs")
             results[asset] = False
     return results
@@ -65,9 +73,13 @@ def refresh_prices():
 
 def context():
     settings = db.get_settings()
-    prices = {asset: settings[f"price_{asset}"] for asset in ASSETS}
+    assets = db.get_assets()
+    prices = {
+        item["symbol"]: settings.get(f'price_{item["symbol"]}', item["manual_price"])
+        for item in assets
+    }
     rows, metrics = build_ledger(db.get_transactions(), settings["opening_cash"], prices)
-    return settings, rows, metrics
+    return settings, assets, rows, metrics
 
 
 def chart_label(value):
@@ -129,7 +141,7 @@ def pnl_chart(rows):
     )
 
 
-def layout(title, active, body):
+def layout(title, active, body, assets=()):
     nav = [
         ("dashboard", "Dashboard", "/"),
         ("transactions", "Transacties", "/transactions"),
@@ -151,11 +163,12 @@ def layout(title, active, body):
     <link rel="stylesheet" href="/static/method.css"></head>
     <body><aside><a class="brand" href="/"><span class="coin-mark">₿Ξ</span><b>Crypto Rendement</b>
     <small>Kraken portfolio</small></a><nav>{links}</nav>
-    <div class="aside-foot">Gemiddelde kostprijsmethode<br><span>BTC · ETH · EUR</span></div></aside>
+    <div class="aside-foot">Gemiddelde kostprijsmethode<br><span>{" · ".join([*(item["symbol"] for item in assets), "EUR"])}</span></div></aside>
     <main class="{active}-page">{body}</main><script src="/static/app.js"></script></body></html>"""
 
 
-def dashboard(settings, rows, metrics):
+def dashboard(settings, assets, rows, metrics):
+    symbols = [item["symbol"] for item in assets]
     pnl_breakdown = (
         '<small class="metric-breakdown">'
         f'<span><em>Gerealiseerd</em><b>{money(metrics["realized"])}</b></span>'
@@ -173,7 +186,7 @@ def dashboard(settings, rows, metrics):
         for label, value, detail in cards
     )
     asset_cards = ""
-    for asset in ASSETS:
+    for asset in symbols:
         item = metrics["assets"][asset]
         asset_cards += f"""<article class="asset-summary">
         <div class="asset-summary-head"><span class="asset-badge {asset.lower()}">{asset}</span>
@@ -185,7 +198,7 @@ def dashboard(settings, rows, metrics):
     recent = "".join(
         f'<tr><td>{esc(row["tx_date"])}</td><td><span class="asset-badge mini {row["asset"].lower()}">{esc(row["asset"])}</span></td>'
         f'<td><span class="pill">{esc(row["type"])}</span></td>'
-        f'<td>{crypto_amount(row["asset_delta"]) if row["asset"] in ASSETS else "–"}</td>'
+        f'<td>{crypto_amount(row["asset_delta"]) if row["asset"] in symbols else "–"}</td>'
         f'<td>{money(row["eur_delta"])}</td></tr>'
         for row in rows[-3:][::-1]
     )
@@ -194,7 +207,7 @@ def dashboard(settings, rows, metrics):
         "Dashboard",
         "dashboard",
         f"""<header><div><p class="eyebrow">PORTFOLIO OVERZICHT</p><h1>Dashboard</h1>
-        <p>Actueel inzicht in je BTC- en ETH-posities en gezamenlijk rendement.</p></div>
+        <p>Actueel inzicht in je cryptoposities en gezamenlijk rendement.</p></div>
         <form method="post" action="/refresh-prices"><button class="secondary">↻ Koersen vernieuwen</button></form></header>
         <section class="metrics">{card_html}</section>
         <section class="grid"><article class="panel chart"><div class="panel-head"><div>
@@ -205,18 +218,26 @@ def dashboard(settings, rows, metrics):
         <p>De meest recente mutaties</p></div><a class="text-link" href="/transactions">Alles bekijken →</a></div>
         <div class="table-wrap"><table><thead><tr><th>Datum</th><th>Coin</th><th>Type</th>
         <th>Hoeveelheid</th><th>EUR-mutatie</th></tr></thead><tbody>{recent}</tbody></table></div></section>""",
+        assets,
     )
 
 
-def transactions(rows, form_error="", draft=None, page_error=""):
+def transactions(assets, rows, form_error="", draft=None, page_error=""):
     draft = draft or {}
+    symbols = [item["symbol"] for item in assets]
     selected_type = draft.get("type", TYPES[0])
-    selected_asset = draft.get("asset", ASSETS[0])
+    selected_asset = draft.get("asset", symbols[0] if symbols else "")
     type_options = "".join(
         f'<option{" selected" if item == selected_type else ""}>{item}</option>' for item in TYPES
     )
     asset_options = "".join(
-        f'<option{" selected" if item == selected_asset else ""}>{item}</option>' for item in ASSETS
+        f'<option{" selected" if item == selected_asset else ""}>{item}</option>' for item in symbols
+    )
+    filter_asset_options = "".join(
+        f'<option value="{esc(item)}">{esc(item)}</option>' for item in [*symbols, "EUR"]
+    )
+    filter_type_options = "".join(
+        f'<option value="{esc(item)}">{esc(item)}</option>' for item in TYPES
     )
     value = lambda name, default="": html.escape(str(draft[name] if name in draft else default))
     is_edit = bool(draft.get("id"))
@@ -260,14 +281,16 @@ def transactions(rows, form_error="", draft=None, page_error=""):
         <button class="icon danger" title="Transactie verwijderen" aria-label="Transactie verwijderen">×</button></form></div>"""
         asset_cell = (
             f'<span class="asset-badge mini {row["asset"].lower()}">{esc(row["asset"])}</span>'
-            if row["asset"] in ASSETS
+            if row["asset"] in symbols
             else "EUR"
         )
         table_rows.append(
-            f'<tr><td>{row["id"]}</td><td>{esc(row["tx_date"])}</td><td>{asset_cell}</td>'
+            f'<tr data-transaction-row data-asset="{esc(row["asset"])}" data-type="{esc(row["type"])}">'
+            f'<td>{row["id"]}</td><td>{esc(row["tx_date"])}</td><td>{asset_cell}</td>'
             f'<td><span class="pill">{esc(row["type"])}</span></td><td>{esc(row["description"])}</td>'
-            f'<td>{crypto_amount(row["asset_amount"]) if row["asset"] in ASSETS else "–"}</td>'
-            f'<td>{money(row["eur_gross"]) if row["eur_gross"] else "–"}</td>'
+            f'<td>{crypto_amount(row["asset_amount"]) if row["asset"] in symbols else "–"}</td>'
+            f'<td class="{"negative" if row["eur_delta"] < 0 else "positive" if row["eur_delta"] > 0 else ""}">'
+            f'{signed_money(row["eur_delta"])}</td>'
             f'<td>{money(row["fee_eur"]) if row["fee_eur"] else "–"}</td><td>{money(row["avg_cost"])}</td>'
             f'<td class="{"negative" if row["historical_total"] < 0 else "positive"}">{money(row["historical_total"])}</td>'
             f"<td>{actions}</td></tr>"
@@ -276,12 +299,20 @@ def transactions(rows, form_error="", draft=None, page_error=""):
         "Transacties",
         "transactions",
         f"""<header><div><p class="eyebrow">JOURNAAL</p><h1>Transacties</h1>
-        <p>Beheer BTC-, ETH- en EUR-mutaties; alle posities worden chronologisch herberekend.</p></div>
+        <p>Beheer crypto- en EUR-mutaties; alle posities worden chronologisch herberekend.</p></div>
         <button id="add-transaction" data-open="tx-dialog">+ Transactie toevoegen</button></header>{page_error_html}
-        <section class="panel"><div class="table-wrap wide"><table><thead><tr><th>#</th><th>Datum</th>
-        <th>Coin</th><th>Type</th><th>Omschrijving</th><th>Hoeveelheid</th><th>EUR totaal</th>
+        <section class="panel"><div class="transaction-toolbar" aria-label="Transacties filteren">
+        <div class="transaction-filters"><label>Coin<select id="transaction-filter-asset">
+        <option value="">Alle coins</option>{filter_asset_options}</select></label>
+        <label>Type<select id="transaction-filter-type"><option value="">Alle types</option>
+        {filter_type_options}</select></label>
+        <button type="button" class="secondary" id="transaction-filter-clear">Filters wissen</button></div>
+        <p class="filter-status" id="transaction-filter-status" aria-live="polite">{len(rows)} transacties</p></div>
+        <div class="table-wrap wide"><table id="transaction-table"><thead><tr><th>#</th><th>Datum</th>
+        <th>Coin</th><th>Type</th><th>Omschrijving</th><th>Hoeveelheid</th><th>EUR-kasmutatie</th>
         <th>Kosten</th><th>Gem. kostprijs</th><th>Portefeuille-PnL</th><th>Acties</th></tr></thead>
-        <tbody>{"".join(table_rows)}</tbody></table></div></section>
+        <tbody>{"".join(table_rows)}<tr id="transaction-filter-empty" hidden><td colspan="11">
+        Geen transacties gevonden voor deze filters.</td></tr></tbody></table></div></section>
         <dialog id="tx-dialog"{reopen}><form id="tx-form" method="post" action="/transactions">
         <input type="hidden" name="id" value="{value('id')}"><div class="dialog-head"><div>
         <h2 id="tx-dialog-title">{"Transactie bewerken" if is_edit else "Nieuwe transactie"}</h2>
@@ -306,14 +337,15 @@ def transactions(rows, form_error="", draft=None, page_error=""):
         <div class="actions"><button type="button" class="secondary" data-close>Annuleren</button>
         <button id="save-transaction">{"Wijzigingen opslaan" if is_edit else "Transactie opslaan"}</button>
         </div></form></dialog>""",
+        assets,
     )
 
 
 METHOD = [
     (
         "Crypto-inkoop",
-        "BTC en ETH volgen dezelfde regels.",
-        "Het totaalbedrag is inclusief fee. De cryptoaankoopwaarde is totaal minus fee. Het volledige totaalbedrag verlaagt het kassaldo en verhoogt de kostbasis van de gekozen coin.",
+        "Alle beheerde assets volgen dezelfde regels.",
+        "Het totaalbedrag is de volledige kasuitstroom inclusief fee. De handelswaarde exclusief fee is totaal minus kosten. Het volledige totaalbedrag verlaagt het kassaldo en verhoogt de kostbasis van de gekozen coin.",
     ),
     (
         "Crypto-verkoop",
@@ -328,11 +360,11 @@ METHOD = [
     (
         "Rewards",
         "Coin zonder EUR-kasstroom.",
-        "Een BTC- of ETH-reward verhoogt het coinsaldo met kostbasis nul. De actuele waarde telt daardoor volledig mee in de ongerealiseerde PnL van die coin.",
+        "Een crypto-reward verhoogt het coinsaldo met kostbasis nul. De actuele waarde telt daardoor volledig mee in de ongerealiseerde PnL van die coin.",
     ),
     (
         "Kostbasis per coin",
-        "Gescheiden administratie voor BTC en ETH.",
+        "Gescheiden administratie voor iedere asset.",
         "Saldo, gemiddelde kostprijs, resterende kostbasis, gerealiseerde PnL en ongerealiseerde PnL worden per coin bijgehouden volgens de gemiddelde kostprijsmethode.",
     ),
     (
@@ -342,45 +374,69 @@ METHOD = [
     ),
     (
         "Gezamenlijk rendement",
-        "BTC, ETH en EUR als één portefeuille.",
-        "Totale PnL is de som van gerealiseerde en ongerealiseerde PnL van BTC en ETH. Totaal rendement is deze PnL gedeeld door de externe netto-inleg. Kassaldo telt mee in de rekeningwaarde, maar niet als PnL.",
+        "Alle crypto-assets en EUR als één portefeuille.",
+        "Totale PnL is de som van gerealiseerde en ongerealiseerde PnL van alle assets. Totaal rendement is deze PnL gedeeld door de externe netto-inleg. Kassaldo telt mee in de rekeningwaarde, maar niet als PnL.",
     ),
     (
         "Koersen en herberekening",
         "Kraken-koers per coin.",
-        "BTC/EUR en ETH/EUR worden afzonderlijk bij Kraken opgehaald, met een eigen handmatige terugvalprijs. Na toevoegen, bewerken of verwijderen worden alle transacties chronologisch opnieuw doorgerekend.",
+        "De geconfigureerde EUR-paren worden afzonderlijk bij Kraken opgehaald, met een eigen handmatige terugvalprijs. Na toevoegen, bewerken of verwijderen worden alle transacties chronologisch opnieuw doorgerekend.",
     ),
 ]
 
 
-def settings_page(settings):
+def settings_page(settings, assets, asset_error=""):
     price_rows = "".join(
-        f"""<article class="price-row"><span class="asset-badge {asset.lower()}">{asset}</span>
-        <div><strong>{money(settings[f"price_{asset}"])}</strong><small>EUR per {asset}</small></div>
-        <div class="price-source"><i></i>{esc(settings[f"price_source_{asset}"])}</div></article>"""
-        for asset in ASSETS
+        f"""<article class="price-row"><span class="asset-badge {item['symbol'].lower()}">{item['symbol']}</span>
+        <div><strong>{money(settings.get(f"price_{item['symbol']}", item['manual_price']))}</strong>
+        <small>EUR per {item['symbol']}</small></div>
+        <div class="price-source"><i></i>{esc(settings.get(f"price_source_{item['symbol']}", 'Handmatige terugvalprijs'))}</div></article>"""
+        for item in assets
+    )
+    asset_rows = "".join(
+        f"""<div class="asset-manage-row"><form class="asset-update-form" method="post" action="/assets/update">
+        <input type="hidden" name="symbol" value="{esc(item['symbol'])}">
+        <label>Symbool<input value="{esc(item['symbol'])}" disabled></label>
+        <label>Naam<input name="name" maxlength="50" required value="{esc(item['name'])}"></label>
+        <label>Kraken-paar<input name="kraken_pair" maxlength="20" required value="{esc(item['kraken_pair'])}"></label>
+        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0.00000001"
+        required value="{esc(item['manual_price'])}"></label>
+        <button class="secondary">Opslaan</button></form>
+        <form class="delete-asset" method="post" action="/assets/delete">
+        <input type="hidden" name="symbol" value="{esc(item['symbol'])}">
+        <button class="icon danger" title="Asset verwijderen" aria-label="{esc(item['symbol'])} verwijderen">×</button></form></div>"""
+        for item in assets
+    )
+    error_html = (
+        f'<div class="page-error" role="alert"><b>Asset niet gewijzigd.</b> {esc(asset_error)}</div>'
+        if asset_error else ""
     )
     return layout(
         "Instellingen",
         "settings",
         f"""<header><div><p class="eyebrow">CONFIGURATIE</p><h1>Instellingen</h1>
-        <p>Koersbronnen en uitgangspunten voor de portefeuilleberekeningen.</p></div></header>
+        <p>Beheer assets, koersbronnen en uitgangspunten voor de portefeuilleberekeningen.</p></div></header>{error_html}
         <section class="grid settings-grid"><form class="panel form-card" method="post" action="/settings">
         <h2>Financiële instellingen</h2><label>Beginsaldo EUR<input name="opening_cash" type="number"
         step="0.01" value="{esc(settings['opening_cash'])}"><small>Saldo vóór de eerste transactie.</small></label>
-        <div class="form-grid"><label>Terugvalprijs BTC/EUR<input name="manual_price_BTC" type="number"
-        step="0.01" value="{esc(settings['manual_price_BTC'])}"></label>
-        <label>Terugvalprijs ETH/EUR<input name="manual_price_ETH" type="number"
-        step="0.01" value="{esc(settings['manual_price_ETH'])}"></label></div>
-        <p class="form-hint">Deze prijzen worden alleen gebruikt als Kraken niet bereikbaar is.</p>
         <button>Instellingen opslaan</button></form>
         <article class="panel price-status"><h2>Koersstatus</h2><div class="price-rows">{price_rows}</div>
-        <form method="post" action="/refresh-prices"><button class="secondary">↻ Beide koersen vernieuwen</button>
-        </form></article></section>""",
+        <form method="post" action="/refresh-prices"><button class="secondary">↻ Alle koersen vernieuwen</button>
+        </form></article></section>
+        <section class="panel asset-management"><div class="panel-head"><div><h2>Crypto-assets</h2>
+        <p>Het Kraken-paar is de ticker-code die voor de EUR-koers wordt gebruikt.</p></div></div>
+        <div class="asset-manage-list">{asset_rows}</div>
+        <form class="asset-add-form" method="post" action="/assets/create"><h3>Asset toevoegen</h3>
+        <div class="form-grid"><label>Symbool<input name="symbol" maxlength="10" required placeholder="SOL"></label>
+        <label>Naam<input name="name" maxlength="50" required placeholder="Solana"></label>
+        <label>Kraken-paar<input name="kraken_pair" maxlength="20" required placeholder="SOLEUR"></label>
+        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0.00000001" required></label></div>
+        <button>Asset toevoegen</button></form></section>""",
+        assets,
     )
 
 
-def method_page():
+def method_page(assets):
     items = "".join(
         f"""<details class="method-card"><summary><span class="method-number">{index + 1:02}</span>
         <span class="method-title"><strong>{title}</strong><small>{summary}</small></span>
@@ -396,12 +452,13 @@ def method_page():
         <section class="method-accordion">{items}</section><aside class="note method-note">
         <b>Belangrijke aanname</b><p>Gebruik bij een cryptostorting de oorspronkelijke aankoopkosten als
         historische kostbasis, niet alleen de marktwaarde op de transferdatum.</p></aside>""",
+        assets,
     )
 
 
-def checks_page(rows, metrics, settings):
+def checks_page(assets, rows, metrics, settings):
     checks = [("Aantal transacties", len(rows), "SQLite")]
-    for asset in ASSETS:
+    for asset in (item["symbol"] for item in assets):
         asset_rows = [row for row in rows if row["asset"] == asset]
         checks.extend(
             [
@@ -420,7 +477,7 @@ def checks_page(rows, metrics, settings):
         "Bron & controles",
         "checks",
         f"""<header><div><p class="eyebrow">AUDIT</p><h1>Bron & controles</h1>
-        <p>Controle van BTC, ETH, EUR en de gezamenlijke modeluitkomsten.</p></div></header>
+        <p>Controle van alle crypto-assets, EUR en de gezamenlijke modeluitkomsten.</p></div></header>
         <section class="grid checks-grid"><article class="panel"><h2>Modelcontroles</h2>
         <div class="table-wrap checks-table"><table><thead><tr><th>Maatstaf</th><th>Model</th>
         <th>Eenheid</th><th>Status</th></tr></thead><tbody>{table_rows}</tbody></table></div></article>
@@ -430,8 +487,9 @@ def checks_page(rows, metrics, settings):
         <div><dt>Ongerealiseerde PnL</dt><dd>{money(metrics["unrealized"])}</dd></div>
         <div><dt>Totale PnL</dt><dd>{money(metrics["total_pnl"])}</dd></div>
         <div><dt>Totaal rendement</dt><dd>{pct(metrics["return"])}</dd></div></dl></article></section>
-        <aside class="note"><b>Bronnen</b><p>Transacties staan lokaal in SQLite. Actuele BTC/EUR- en
-        ETH/EUR-koersen komen uit de publieke Kraken Spot REST Ticker; per coin is een terugvalprijs beschikbaar.</p></aside>""",
+        <aside class="note"><b>Bronnen</b><p>Transacties en assets staan lokaal in SQLite. Actuele
+        EUR-koersen komen uit de publieke Kraken Spot REST Ticker; per coin is een terugvalprijs beschikbaar.</p></aside>""",
+        assets,
     )
 
 
@@ -459,6 +517,31 @@ def decimal_field(data, name):
     return value
 
 
+def asset_values(data, creating=False):
+    symbol = str(data.get("symbol", "")).strip().upper()
+    name = str(data.get("name", "")).strip()
+    pair = str(data.get("kraken_pair", "")).strip().upper().replace("/", "")
+    manual_price = decimal_field(data, "manual_price")
+    if not re.fullmatch(r"[A-Z0-9]{2,10}", symbol):
+        raise ValueError("Gebruik een symbool van 2 tot 10 letters of cijfers.")
+    if symbol == "EUR":
+        raise ValueError("EUR is gereserveerd voor het kassaldo.")
+    if not name or len(name) > 50:
+        raise ValueError("Vul een naam van maximaal 50 tekens in.")
+    if not re.fullmatch(r"[A-Z0-9.]{3,20}", pair):
+        raise ValueError("Vul een geldig Kraken-paar in, bijvoorbeeld SOLEUR.")
+    if manual_price <= 0:
+        raise ValueError("De terugvalprijs moet groter dan nul zijn.")
+    if creating and db.get_asset(symbol):
+        raise ValueError(f"Asset {symbol} bestaat al.")
+    return {
+        "symbol": symbol,
+        "name": name,
+        "kraken_pair": pair,
+        "manual_price": str(manual_price),
+    }
+
+
 def transaction_values(data):
     kind = data.get("type")
     if kind not in TYPES:
@@ -469,9 +552,10 @@ def transaction_values(data):
     except ValueError as exc:
         raise ValueError("Vul een geldige transactiedatum in.") from exc
     is_crypto = kind in CRYPTO_ACTIONS
-    asset = data.get("asset", "BTC") if is_crypto else "EUR"
-    if is_crypto and asset not in ASSETS:
-        raise ValueError("Kies BTC of ETH.")
+    asset = data.get("asset", "") if is_crypto else "EUR"
+    symbols = {item["symbol"] for item in db.get_assets()}
+    if is_crypto and asset not in symbols:
+        raise ValueError("Kies een bestaande crypto-asset.")
     asset_amount = decimal_field(data, "asset_amount") if is_crypto else Decimal("0")
     eur_gross = (
         decimal_field(data, "eur_gross")
@@ -498,7 +582,10 @@ def transaction_values(data):
 
 def ledger_validation_error(transactions):
     settings = db.get_settings()
-    prices = {asset: settings[f"price_{asset}"] for asset in ASSETS}
+    prices = {
+        item["symbol"]: settings.get(f'price_{item["symbol"]}', item["manual_price"])
+        for item in db.get_assets()
+    }
     rows, _ = build_ledger(
         sorted(transactions, key=lambda transaction: (transaction["tx_date"], int(transaction["id"]))),
         settings["opening_cash"],
@@ -599,15 +686,38 @@ def application(environ, start):
             return redirect(start, environ.get("HTTP_REFERER", "/"))
         if path == "/settings":
             db.set_setting("opening_cash", data.get("opening_cash", 0))
-            for asset in ASSETS:
-                db.set_setting(f"manual_price_{asset}", data.get(f"manual_price_{asset}", 0))
+            return redirect(start, "/settings")
+        if path in {"/assets/create", "/assets/update", "/assets/delete"}:
+            try:
+                symbol = str(data.get("symbol", "")).strip().upper()
+                if path == "/assets/create":
+                    db.create_asset(asset_values(data, creating=True))
+                elif path == "/assets/update":
+                    if not db.get_asset(symbol):
+                        raise ValueError("De asset bestaat niet meer.")
+                    db.update_asset(symbol, asset_values(data))
+                else:
+                    if len(db.get_assets()) <= 1:
+                        raise ValueError("Er moet minimaal één crypto-asset blijven bestaan.")
+                    count = db.asset_transaction_count(symbol)
+                    if count:
+                        raise ValueError(
+                            f"{symbol} kan niet worden verwijderd omdat er {count} transactie(s) aan gekoppeld zijn."
+                        )
+                    if not db.delete_asset(symbol):
+                        raise ValueError("De asset bestaat niet meer.")
+            except ValueError as exc:
+                settings, assets, _, _ = context()
+                return html_response(
+                    start, settings_page(settings, assets, str(exc)), "422 Unprocessable Entity"
+                )
             return redirect(start, "/settings")
         if path == "/delete":
             error = deletion_validation_error(data.get("id"))
             if error:
-                _, rows, _ = context()
+                _, assets, rows, _ = context()
                 return html_response(
-                    start, transactions(rows, page_error=error), "422 Unprocessable Entity"
+                    start, transactions(assets, rows, page_error=error), "422 Unprocessable Entity"
                 )
             db.delete_transaction(data.get("id"))
             return redirect(start, "/transactions")
@@ -619,27 +729,27 @@ def application(environ, start):
                 values = None
                 error = str(exc)
             if error:
-                _, rows, _ = context()
+                _, assets, rows, _ = context()
                 draft = {**data, **(values or {})}
                 return html_response(
-                    start, transactions(rows, error, draft), "422 Unprocessable Entity"
+                    start, transactions(assets, rows, error, draft), "422 Unprocessable Entity"
                 )
             if data.get("id"):
                 db.update_transaction(data["id"], values)
             else:
                 db.create_transaction(values)
             return redirect(start, "/transactions")
-    settings, rows, metrics = context()
+    settings, assets, rows, metrics = context()
     page = (
-        dashboard(settings, rows, metrics)
+        dashboard(settings, assets, rows, metrics)
         if path == "/"
-        else transactions(rows)
+        else transactions(assets, rows)
         if path == "/transactions"
-        else settings_page(settings)
+        else settings_page(settings, assets)
         if path == "/settings"
-        else method_page()
+        else method_page(assets)
         if path == "/method"
-        else checks_page(rows, metrics, settings)
+        else checks_page(assets, rows, metrics, settings)
         if path == "/checks"
         else None
     )

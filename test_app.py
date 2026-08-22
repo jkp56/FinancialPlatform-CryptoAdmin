@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from wsgiref.util import setup_testing_defaults
 
 import db
-from app import application, crypto_amount, pnl_chart, run_server
+from app import application, crypto_amount, pnl_chart, run_server, signed_money
 from calculations import build_ledger
 
 
@@ -78,6 +78,25 @@ class CryptoAdminTest(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(body, "ok")
 
+    def test_signed_money_describes_cash_direction(self):
+        self.assertEqual(signed_money(Decimal("150")), "+ € 150,00")
+        self.assertEqual(signed_money(Decimal("-172.77")), "− € 172,77")
+        self.assertEqual(signed_money(Decimal("0")), "–")
+
+    def test_transaction_page_has_coin_and_type_filters(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            status, body = self.get("/transactions")
+            self.assertEqual(status, "200 OK")
+            self.assertIn('id="transaction-filter-asset"', body)
+            self.assertIn('id="transaction-filter-type"', body)
+            self.assertIn('data-asset="BTC" data-type="Inkoop"', body)
+            self.assertIn("EUR-kasmutatie", body)
+            self.assertIn("− € 50,00", body)
+            self.assertIn("+ € 50,00", body)
+
     def test_transaction_crud_for_eth(self):
         values = {
             "tx_date": "2026-07-20",
@@ -100,6 +119,77 @@ class CryptoAdminTest(unittest.TestCase):
             self.assertEqual(db.get_transaction(transaction_id)["description"], "Gecorrigeerd")
             self.assertTrue(db.delete_transaction(transaction_id))
             self.assertIsNone(db.get_transaction(transaction_id))
+
+    def test_asset_can_be_added_used_and_not_deleted_while_referenced(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            status, _ = self.post(
+                "/assets/create",
+                {
+                    "symbol": "sol",
+                    "name": "Solana",
+                    "kraken_pair": "SOL/EUR",
+                    "manual_price": "125.50",
+                },
+            )
+            self.assertEqual(status, "303 See Other")
+            self.assertEqual(db.get_asset("SOL")["kraken_pair"], "SOLEUR")
+            self.assertEqual(db.get_settings()["price_SOL"], "125.50")
+
+            status, _ = self.post(
+                "/transactions",
+                {
+                    "tx_date": "2026-07-20",
+                    "asset": "SOL",
+                    "type": "Reward",
+                    "description": "SOL reward",
+                    "asset_amount": "0.01",
+                },
+            )
+            self.assertEqual(status, "303 See Other")
+            self.assertEqual(db.get_transactions()[-1]["asset"], "SOL")
+
+            status, body = self.post("/assets/delete", {"symbol": "SOL"})
+            self.assertEqual(status, "422 Unprocessable Entity")
+            self.assertIn("kan niet worden verwijderd", body)
+            self.assertIsNotNone(db.get_asset("SOL"))
+
+    def test_dynamic_asset_is_included_in_ledger_metrics(self):
+        transactions = [tx(1, "2026-07-01", "SOL", "Storting", "2", cost="200")]
+        _, metrics = build_ledger(transactions, Decimal("0"), {"SOL": "125"})
+        self.assertEqual(metrics["assets"]["SOL"]["balance"], Decimal("2"))
+        self.assertEqual(metrics["assets"]["SOL"]["market"], Decimal("250"))
+        self.assertEqual(metrics["total_pnl"], Decimal("50"))
+
+    def test_unreferenced_asset_can_be_deleted(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            db.create_asset(
+                {
+                    "symbol": "SOL",
+                    "name": "Solana",
+                    "kraken_pair": "SOLEUR",
+                    "manual_price": "100",
+                }
+            )
+            status, _ = self.post("/assets/delete", {"symbol": "SOL"})
+            self.assertEqual(status, "303 See Other")
+            self.assertIsNone(db.get_asset("SOL"))
+            self.assertNotIn("price_SOL", db.get_settings())
+
+    def test_deleted_default_asset_stays_deleted_after_restart(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            self.assertTrue(db.delete_asset("ETH"))
+            db.init_db()
+            self.assertIsNone(db.get_asset("ETH"))
+            self.assertNotIn("price_ETH", db.get_settings())
 
     def test_legacy_database_is_backed_up_and_migrated_to_btc(self):
         with TemporaryDirectory() as temp_dir:

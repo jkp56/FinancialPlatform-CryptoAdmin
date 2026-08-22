@@ -1,6 +1,6 @@
 # Crypto Rendement
 
-Lokale Python-webapp voor een Kraken-portefeuille met BTC, ETH en EUR. De app houdt transacties, kassaldo, gemiddelde kostprijs en rendement per coin én voor de gezamenlijke portefeuille bij.
+Lokale Python-webapp voor een Kraken-portefeuille met dynamisch beheerde crypto-assets en EUR. De app houdt transacties, kassaldo, gemiddelde kostprijs en rendement per coin én voor de gezamenlijke portefeuille bij. BTC en ETH zijn standaard aanwezig; aanvullende assets beheer je via **Instellingen**.
 
 De volledige, eenduidige procedure voor installatie en updates vanaf Windows
 staat in [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -50,16 +50,16 @@ startcommando's, back-up, herstelprocedure, SSH-toegang en foutoplossing.
 
 ## Koersen
 
-**Koersen vernieuwen** gebruikt de publieke Kraken Spot REST Ticker voor:
+**Koersen vernieuwen** gebruikt de publieke Kraken Spot REST Ticker voor de EUR-paren die per asset zijn ingesteld. Standaard zijn dit:
 
 - BTC/EUR
 - ETH/EUR
 
-Bij een netwerkstoring gebruikt iedere coin zijn eigen handmatige terugvalprijs uit **Instellingen**. Er zijn geen Kraken API-sleutels nodig.
+Bij een netwerkstoring gebruikt iedere coin zijn eigen handmatige terugvalprijs uit **Instellingen**. Daar kun je ook assets toevoegen, hun naam of Kraken-paar wijzigen en ongebruikte assets verwijderen. Een asset met gekoppelde transacties kan niet worden verwijderd. Er zijn geen Kraken API-sleutels nodig.
 
 ## Transacties
 
-De ondersteunde transactietypen zijn voor BTC en ETH identiek:
+De ondersteunde transactietypen zijn voor alle beheerde crypto-assets identiek:
 
 - Inkoop
 - Verkoop
@@ -77,7 +77,7 @@ Een cryptostorting vereist de oorspronkelijke historische kostbasis. Rewards kri
 
 ## Rendement
 
-Voor BTC en ETH worden afzonderlijk bijgehouden:
+Voor iedere beheerde crypto-asset worden afzonderlijk bijgehouden:
 
 - saldo en marktwaarde;
 - gemiddelde kostprijs en resterende kostbasis;
@@ -97,7 +97,7 @@ locatie is gekoppeld aan `/opt/apps/crypto-admin/data` op de NUC.
 Bij de eerste start van de multi-coin versie wordt de bestaande BTC-database automatisch gemigreerd:
 
 - bestaande cryptotransacties blijven BTC;
-- de hoeveelheidkolom wordt generiek voor BTC en ETH;
+- de hoeveelheidkolom wordt generiek voor alle crypto-assets;
 - vóór de migratie wordt eenmalig `crypto_admin.pre_multi_asset.sqlite3` aangemaakt.
 
 Maak voor aanvullende back-ups een kopie van het SQLite-bestand terwijl de app niet draait.

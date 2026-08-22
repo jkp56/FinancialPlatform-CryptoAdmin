@@ -261,6 +261,7 @@ th, td {
     color: #fff;
     font-size: 11px;
     font-weight: 800;
+    background: var(--blue);
 }
 
 .asset-badge.btc {
@@ -325,6 +326,50 @@ th, td {
     margin-bottom: 2px;
 }
 
+[hidden] {
+    display: none !important;
+}
+
+.transaction-toolbar,
+.transaction-filters {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+}
+
+.transaction-toolbar {
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+
+.transaction-filters label {
+    min-width: 150px;
+    margin: 0;
+}
+
+.transaction-filters select {
+    min-height: 42px;
+}
+
+.transaction-filters button {
+    min-height: 42px;
+}
+
+.transaction-filters button:disabled {
+    cursor: default;
+    opacity: .55;
+}
+
+.filter-status {
+    white-space: nowrap;
+}
+
+#transaction-filter-empty td {
+    padding: 28px 12px;
+    color: var(--muted);
+    text-align: center;
+}
+
 .checks-table {
     max-height: calc(100vh - 235px);
 }
@@ -345,5 +390,19 @@ th, td {
 
     .price-source {
         grid-column: 2;
+    }
+
+    .transaction-toolbar,
+    .transaction-filters {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .transaction-toolbar {
+        align-items: stretch;
+    }
+
+    .transaction-filters label {
+        min-width: 0;
     }
 }

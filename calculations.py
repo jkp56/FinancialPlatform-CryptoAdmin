@@ -3,7 +3,6 @@ from decimal import Decimal, getcontext
 getcontext().prec = 28
 D = Decimal
 
-ASSETS = ("BTC", "ETH")
 CRYPTO_IN = {"Inkoop", "Storting", "Reward"}
 CRYPTO_OUT = {"Verkoop", "Opname"}
 CRYPTO_ACTIONS = CRYPTO_IN | CRYPTO_OUT
@@ -15,8 +14,8 @@ def dec(value):
 
 def _prices(current_prices):
     if isinstance(current_prices, dict):
-        return {asset: dec(current_prices.get(asset)) for asset in ASSETS}
-    return {"BTC": dec(current_prices), "ETH": D("0")}
+        return {asset: dec(price) for asset, price in current_prices.items()}
+    return {"BTC": dec(current_prices)}
 
 
 def _asset_state(prices):
@@ -28,12 +27,16 @@ def _asset_state(prices):
             "net_invested": D("0"),
             "previous_reference": prices[asset],
         }
-        for asset in ASSETS
+        for asset in prices
     }
 
 
 def build_ledger(transactions, opening_cash, current_prices):
     prices = _prices(current_prices)
+    for transaction in transactions:
+        asset = transaction.get("asset") if hasattr(transaction, "get") else transaction["asset"]
+        if asset and asset != "EUR" and asset not in prices:
+            prices[asset] = D("0")
     states = _asset_state(prices)
     cash = external = dec(opening_cash)
     rows = []

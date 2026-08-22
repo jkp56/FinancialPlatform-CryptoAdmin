@@ -46,3 +46,58 @@
 .page-error {
     margin: -6px 0 12px;
 }
+
+.asset-management {
+    margin-top: 16px;
+}
+
+.asset-manage-list {
+    display: grid;
+    gap: 10px;
+}
+
+.asset-manage-row {
+    display: flex;
+    align-items: end;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 10px;
+}
+
+.asset-update-form {
+    display: grid;
+    grid-template-columns: .6fr 1fr 1fr 1fr auto;
+    align-items: end;
+    gap: 10px;
+    flex: 1;
+}
+
+.asset-update-form label,
+.asset-add-form label {
+    margin: 0;
+}
+
+.asset-update-form button,
+.delete-asset button {
+    white-space: nowrap;
+}
+
+.delete-asset {
+    margin: 0 0 2px;
+}
+
+.asset-add-form {
+    border-top: 1px solid var(--line);
+    margin-top: 18px;
+    padding-top: 16px;
+}
+
+.asset-add-form h3 {
+    margin: 0 0 12px;
+}
+
+@media (max-width: 900px) {
+    .asset-update-form {
+        grid-template-columns: 1fr 1fr;
+    }
+}
