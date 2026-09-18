@@ -15,11 +15,27 @@ import db
 from calculations import CRYPTO_ACTIONS, build_ledger
 
 ROOT = Path(__file__).parent
-TYPES = ["Inkoop", "Verkoop", "Storting", "Opname", "Reward", "EUR Storting", "EUR Opname"]
+TYPES = ["Inkoop", "Verkoop", "Dust sweeping", "Storting", "Opname", "Reward", "EUR Storting", "EUR Opname"]
+
+
+NUMBER_FIELDS = {"asset_amount", "eur_gross", "fee_eur", "transferred_cost_basis_eur"}
+
+
+def decimal_text(value):
+    return format(Decimal(str(value or 0)), "f")
+
+
+def form_value(value):
+    try:
+        return decimal_text(value) if value != "" else ""
+    except Exception:
+        return str(value)
 
 
 def money(value):
-    return f"€ {float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    amount = Decimal(str(value or 0))
+    precision = max(2, len(decimal_text(amount).partition(".")[2].rstrip("0")))
+    return f"€ {amount:,.{precision}f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def signed_money(value):
@@ -30,7 +46,9 @@ def signed_money(value):
 
 
 def crypto_amount(value):
-    formatted = f"{Decimal(str(value or 0)):.12f}".rstrip("0").rstrip(".") or "0"
+    formatted = decimal_text(value)
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
     whole, _, fraction = formatted.partition(".")
     return f"{whole}.{fraction.ljust(8, '0')}"
 
@@ -40,7 +58,7 @@ def btc(value):
 
 
 def pct(value):
-    return f"{float(value) * 100:.2f}%".replace(".", ",")
+    return f"{Decimal(str(value)) * 100:.2f}%".replace(".", ",")
 
 
 def esc(value):
@@ -59,7 +77,7 @@ def refresh_prices():
             if payload.get("error"):
                 raise ValueError(", ".join(payload["error"]))
             item = next(iter(payload["result"].values()))
-            price = float(item["c"][0])
+            price = decimal_text(item["c"][0])
             db.set_setting(f"price_{asset}", price)
             db.set_setting(f"price_source_{asset}", "Kraken · laatste transactie")
             db.set_setting(f"price_updated_{asset}", datetime.now(timezone.utc).isoformat())
@@ -239,7 +257,9 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
     filter_type_options = "".join(
         f'<option value="{esc(item)}">{esc(item)}</option>' for item in TYPES
     )
-    value = lambda name, default="": html.escape(str(draft[name] if name in draft else default))
+    value = lambda name, default="": html.escape(
+        form_value(draft.get(name, default)) if name in NUMBER_FIELDS else str(draft.get(name, default))
+    )
     is_edit = bool(draft.get("id"))
     error_html = (
         f'<div id="tx-error" class="form-error" role="alert"><b>Transactie niet opgeslagen</b>'
@@ -258,7 +278,7 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
         edit_data = esc(
             json.dumps(
                 {
-                    key: row[key]
+                    key: decimal_text(row[key]) if key in NUMBER_FIELDS else row[key]
                     for key in (
                         "id",
                         "tx_date",
@@ -328,11 +348,11 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
         <input type="number" step="any" min="0" inputmode="decimal" name="asset_amount"
         value="{value('asset_amount')}"></label>
         <label data-field="eur"><span id="eur-label">Bedrag EUR</span>
-        <input type="number" step="0.01" min="0" name="eur_gross" value="{value('eur_gross')}">
+        <input type="number" step="any" min="0" name="eur_gross" value="{value('eur_gross')}">
         <small id="eur-help"></small></label>
-        <label data-field="fee">Kosten EUR<input type="number" step="0.01" min="0" name="fee_eur"
+        <label data-field="fee">Kosten EUR<input type="number" step="any" min="0" name="fee_eur"
         value="{value('fee_eur', 0)}"></label>
-        <label data-field="cost">Historische kostbasis EUR<input type="number" step="0.01" min="0"
+        <label data-field="cost">Historische kostbasis EUR<input type="number" step="any" min="0"
         name="transferred_cost_basis_eur" value="{value('transferred_cost_basis_eur')}"></label></div>
         <div class="actions"><button type="button" class="secondary" data-close>Annuleren</button>
         <button id="save-transaction">{"Wijzigingen opslaan" if is_edit else "Transactie opslaan"}</button>
@@ -342,6 +362,11 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
 
 
 METHOD = [
+    (
+        "Dust sweeping",
+        "Kleine restsaldi omzetten naar EUR.",
+        "Boek per ingeleverde asset een dust sweeping met de hoeveelheid, het eigen aandeel in de netto EUR-opbrengst en de kosten. De kostbasis wordt afgeboekt en het verschil met de netto-opbrengst is gerealiseerde PnL. Verdeel bij meerdere assets de opbrengst en kosten; boek de EUR-ontvangst niet nogmaals als storting. Bedragen kleiner dan een cent en een netto-opbrengst van nul zijn toegestaan.",
+    ),
     (
         "Crypto-inkoop",
         "Alle beheerde assets volgen dezelfde regels.",
@@ -399,8 +424,8 @@ def settings_page(settings, assets, asset_error=""):
         <label>Symbool<input value="{esc(item['symbol'])}" disabled></label>
         <label>Naam<input name="name" maxlength="50" required value="{esc(item['name'])}"></label>
         <label>Kraken-paar<input name="kraken_pair" maxlength="20" required value="{esc(item['kraken_pair'])}"></label>
-        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0.00000001"
-        required value="{esc(item['manual_price'])}"></label>
+        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0"
+        required value="{esc(decimal_text(item['manual_price']))}"></label>
         <button class="secondary">Opslaan</button></form>
         <form class="delete-asset" method="post" action="/assets/delete">
         <input type="hidden" name="symbol" value="{esc(item['symbol'])}">
@@ -418,7 +443,7 @@ def settings_page(settings, assets, asset_error=""):
         <p>Beheer assets, koersbronnen en uitgangspunten voor de portefeuilleberekeningen.</p></div></header>{error_html}
         <section class="grid settings-grid"><form class="panel form-card" method="post" action="/settings">
         <h2>Financiële instellingen</h2><label>Beginsaldo EUR<input name="opening_cash" type="number"
-        step="0.01" value="{esc(settings['opening_cash'])}"><small>Saldo vóór de eerste transactie.</small></label>
+        step="any" value="{esc(decimal_text(settings['opening_cash']))}"><small>Saldo vóór de eerste transactie.</small></label>
         <button>Instellingen opslaan</button></form>
         <article class="panel price-status"><h2>Koersstatus</h2><div class="price-rows">{price_rows}</div>
         <form method="post" action="/refresh-prices"><button class="secondary">↻ Alle koersen vernieuwen</button>
@@ -430,7 +455,7 @@ def settings_page(settings, assets, asset_error=""):
         <div class="form-grid"><label>Symbool<input name="symbol" maxlength="10" required placeholder="SOL"></label>
         <label>Naam<input name="name" maxlength="50" required placeholder="Solana"></label>
         <label>Kraken-paar<input name="kraken_pair" maxlength="20" required placeholder="SOLEUR"></label>
-        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0.00000001" required></label></div>
+        <label>Terugvalprijs EUR<input name="manual_price" type="number" step="any" min="0" required></label></div>
         <button>Asset toevoegen</button></form></section>""",
         assets,
     )
@@ -538,7 +563,7 @@ def asset_values(data, creating=False):
         "symbol": symbol,
         "name": name,
         "kraken_pair": pair,
-        "manual_price": str(manual_price),
+        "manual_price": decimal_text(manual_price),
     }
 
 
@@ -559,10 +584,10 @@ def transaction_values(data):
     asset_amount = decimal_field(data, "asset_amount") if is_crypto else Decimal("0")
     eur_gross = (
         decimal_field(data, "eur_gross")
-        if kind in {"Inkoop", "Verkoop", "EUR Storting", "EUR Opname"}
+        if kind in {"Inkoop", "Verkoop", "Dust sweeping", "EUR Storting", "EUR Opname"}
         else Decimal("0")
     )
-    fee_eur = decimal_field(data, "fee_eur") if kind in {"Inkoop", "Verkoop"} else Decimal("0")
+    fee_eur = decimal_field(data, "fee_eur") if kind in {"Inkoop", "Verkoop", "Dust sweeping"} else Decimal("0")
     transferred = (
         decimal_field(data, "transferred_cost_basis_eur")
         if kind == "Storting"
@@ -573,10 +598,10 @@ def transaction_values(data):
         "asset": asset,
         "type": kind,
         "description": data.get("description", "").strip(),
-        "asset_amount": str(asset_amount),
-        "eur_gross": str(eur_gross),
-        "fee_eur": str(fee_eur),
-        "transferred_cost_basis_eur": str(transferred),
+        "asset_amount": decimal_text(asset_amount),
+        "eur_gross": decimal_text(eur_gross),
+        "fee_eur": decimal_text(fee_eur),
+        "transferred_cost_basis_eur": decimal_text(transferred),
     }
 
 

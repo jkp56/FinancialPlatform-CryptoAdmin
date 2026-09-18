@@ -3,6 +3,9 @@ import shutil
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from decimal import Decimal
+
+sqlite3.register_converter("DECIMAL_TEXT", lambda value: Decimal(value.decode()))
 
 DB_PATH = Path(
     os.environ.get(
@@ -29,7 +32,7 @@ SEED = [
 
 
 def connect():
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
     con.row_factory = sqlite3.Row
     return con
 
@@ -50,6 +53,49 @@ def _backup_legacy_database():
             shutil.copy2(DB_PATH, backup)
 
 
+DECIMAL_COLUMNS = {"asset_amount", "eur_gross", "fee_eur", "transferred_cost_basis_eur", "manual_price"}
+
+
+def _decimal_values(values):
+    return {key: format(Decimal(str(value)), "f") if key in DECIMAL_COLUMNS else value
+            for key, value in values.items()}
+
+
+def _migrate_decimal_storage(con):
+    tables = []
+    for table in ("transactions", "assets"):
+        columns = con.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(row["name"] in DECIMAL_COLUMNS and row["type"] != "DECIMAL_TEXT" for row in columns):
+            tables.append((table, columns))
+    if not tables:
+        return
+    backup = DB_PATH.with_name(DB_PATH.stem + ".pre_decimal.sqlite3")
+    if not backup.exists():
+        with closing(sqlite3.connect(DB_PATH)) as source, closing(sqlite3.connect(backup)) as target:
+            source.backup(target)
+    for table, columns in tables:
+        rows = [dict(row) for row in con.execute(f"SELECT * FROM {table}")]
+        definitions = []
+        for column in columns:
+            name = column["name"]
+            definition = f'"{name}" ' + ("DECIMAL_TEXT" if name in DECIMAL_COLUMNS else column["type"])
+            if column["pk"]:
+                definition += " PRIMARY KEY"
+            if column["notnull"]:
+                definition += " NOT NULL"
+            if column["dflt_value"] is not None:
+                definition += " DEFAULT " + column["dflt_value"]
+            definitions.append(definition)
+        con.execute(f"CREATE TABLE {table}_decimal (" + ",".join(definitions) + ")")
+        names = [column["name"] for column in columns]
+        con.executemany(
+            f"INSERT INTO {table}_decimal (" + ",".join(names) + ") VALUES (" + ",".join("?" for _ in names) + ")",
+            [tuple(_decimal_values(row)[name] for name in names) for row in rows],
+        )
+        con.execute(f"DROP TABLE {table}")
+        con.execute(f"ALTER TABLE {table}_decimal RENAME TO {table}")
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     _backup_legacy_database()
@@ -62,10 +108,10 @@ def init_db():
               asset TEXT NOT NULL DEFAULT 'BTC',
               type TEXT NOT NULL,
               description TEXT NOT NULL DEFAULT '',
-              asset_amount NUMERIC NOT NULL DEFAULT 0,
-              eur_gross NUMERIC NOT NULL DEFAULT 0,
-              fee_eur NUMERIC NOT NULL DEFAULT 0,
-              transferred_cost_basis_eur NUMERIC NOT NULL DEFAULT 0,
+              asset_amount DECIMAL_TEXT NOT NULL DEFAULT '0',
+              eur_gross DECIMAL_TEXT NOT NULL DEFAULT '0',
+              fee_eur DECIMAL_TEXT NOT NULL DEFAULT '0',
+              transferred_cost_basis_eur DECIMAL_TEXT NOT NULL DEFAULT '0',
               created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS settings(
@@ -77,7 +123,7 @@ def init_db():
               symbol TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               kraken_pair TEXT NOT NULL,
-              manual_price NUMERIC NOT NULL DEFAULT 0,
+              manual_price DECIMAL_TEXT NOT NULL DEFAULT '0',
               sort_order INTEGER NOT NULL DEFAULT 0,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
@@ -88,6 +134,8 @@ def init_db():
             con.execute("ALTER TABLE transactions ADD COLUMN asset TEXT NOT NULL DEFAULT 'BTC'")
         if "asset_amount" not in columns and "btc_amount" in columns:
             con.execute("ALTER TABLE transactions RENAME COLUMN btc_amount TO asset_amount")
+
+        _migrate_decimal_storage(con)
 
         con.execute("UPDATE transactions SET asset='EUR' WHERE type LIKE 'EUR %'")
         con.execute("UPDATE transactions SET asset='BTC', type=substr(type,5) WHERE type LIKE 'BTC %'")
@@ -129,7 +177,7 @@ def init_db():
                 """INSERT INTO transactions(
                     tx_date,asset,type,description,asset_amount,eur_gross,fee_eur,transferred_cost_basis_eur
                 ) VALUES (?,?,?,?,?,?,?,?)""",
-                SEED,
+                [tuple(format(Decimal(str(v)), "f") if i >= 4 else v for i, v in enumerate(row)) for row in SEED],
             )
 
 
@@ -149,7 +197,7 @@ def create_transaction(values):
             """INSERT INTO transactions(
                 tx_date,asset,type,description,asset_amount,eur_gross,fee_eur,transferred_cost_basis_eur
             ) VALUES (:tx_date,:asset,:type,:description,:asset_amount,:eur_gross,:fee_eur,:transferred_cost_basis_eur)""",
-            values,
+            _decimal_values(values),
         )
         return cursor.lastrowid
 
@@ -162,7 +210,7 @@ def update_transaction(transaction_id, values):
                 asset_amount=:asset_amount,eur_gross=:eur_gross,fee_eur=:fee_eur,
                 transferred_cost_basis_eur=:transferred_cost_basis_eur
             WHERE id=:id""",
-            {**values, "id": transaction_id},
+            {**_decimal_values(values), "id": transaction_id},
         )
         return cursor.rowcount == 1
 
@@ -202,7 +250,7 @@ def create_asset(values):
             """INSERT INTO assets(symbol,name,kraken_pair,manual_price,sort_order)
                VALUES (:symbol,:name,:kraken_pair,:manual_price,
                  COALESCE((SELECT MAX(sort_order) + 10 FROM assets),10))""",
-            values,
+            _decimal_values(values),
         )
         for key, value in (
             (f"manual_price_{values['symbol']}", values["manual_price"]),
@@ -220,7 +268,7 @@ def update_asset(symbol, values):
         cursor = con.execute(
             """UPDATE assets SET name=:name,kraken_pair=:kraken_pair,
                manual_price=:manual_price WHERE symbol=:symbol""",
-            {**values, "symbol": symbol},
+            {**_decimal_values(values), "symbol": symbol},
         )
         con.execute(
             """INSERT INTO settings(key,value) VALUES (?,?)

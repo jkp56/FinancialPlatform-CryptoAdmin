@@ -1,8 +1,11 @@
 import io
+import html
+import json
 import re
 import sqlite3
 import unittest
 import urllib.parse
+from contextlib import closing
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -39,6 +42,106 @@ def tx(
 
 
 class CryptoAdminTest(unittest.TestCase):
+    def test_existing_numeric_database_migrates_once_with_backup(self):
+        with TemporaryDirectory() as temp_dir, patch.object(db, "DB_PATH", Path(temp_dir) / "test.sqlite3"):
+            with closing(sqlite3.connect(db.DB_PATH)) as con, con:
+                con.execute("""CREATE TABLE transactions (
+                    id INTEGER PRIMARY KEY, tx_date TEXT, asset TEXT, type TEXT,
+                    description TEXT, asset_amount NUMERIC, eur_gross NUMERIC,
+                    fee_eur NUMERIC, transferred_cost_basis_eur NUMERIC,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+                con.execute("INSERT INTO transactions VALUES (42,'2026-09-10','BTC','Reward','Reward',0.0000003166,0,0,0,'original')")
+            db.init_db()
+            self.assertEqual(db.get_transaction(42)["asset_amount"], Decimal("0.0000003166"))
+            self.assertEqual(db.get_transaction(42)["created_at"], "original")
+            backup = db.DB_PATH.with_name("test.pre_decimal.sqlite3")
+            self.assertTrue(backup.exists())
+            before = backup.read_bytes()
+            db.init_db()
+            self.assertEqual(backup.read_bytes(), before)
+            values = dict(db.get_transaction(42))
+            for field in ("asset_amount", "eur_gross", "fee_eur", "transferred_cost_basis_eur"):
+                values[field] = "123.456789012345678901234567890123"
+            db.update_transaction(42, values)
+            for field in ("asset_amount", "eur_gross", "fee_eur", "transferred_cost_basis_eur"):
+                self.assertEqual(db.get_transaction(42)[field], Decimal(values[field]))
+
+    def test_decimal_storage_and_edit_form_round_trip(self):
+        with TemporaryDirectory() as temp_dir, patch.object(db, "DB_PATH", Path(temp_dir) / "test.sqlite3"):
+            db.init_db()
+            values = tx(0, "2026-09-12", "BTC", "Storting",
+                        "0.0000003166000000000123456789", cost="1234.567890123456789012345678")
+            transaction_id = db.create_transaction(values)
+            saved = db.get_transaction(transaction_id)
+            self.assertEqual(saved["asset_amount"], Decimal(values["asset_amount"]))
+            self.assertEqual(saved["transferred_cost_basis_eur"], Decimal(values["transferred_cost_basis_eur"]))
+            status, body = self.get("/transactions")
+            payloads = [json.loads(html.unescape(value)) for value in re.findall(r'data-transaction="([^"]+)"', body)]
+            edit = next(value for value in payloads if value["id"] == transaction_id)
+            self.assertEqual(edit["asset_amount"], values["asset_amount"])
+            self.assertEqual(edit["transferred_cost_basis_eur"], values["transferred_cost_basis_eur"])
+            status, _ = self.post("/transactions", edit)
+            self.assertEqual(status, "303 See Other")
+            self.assertEqual(db.get_transaction(transaction_id)["asset_amount"], saved["asset_amount"])
+            db.init_db()
+            self.assertEqual(db.get_transaction(transaction_id)["transferred_cost_basis_eur"], saved["transferred_cost_basis_eur"])
+
+    def test_plain_decimal_display_for_all_numeric_fields(self):
+        from app import decimal_text, money, transactions, settings_page
+        self.assertEqual(decimal_text(Decimal("3.166E-7")), "0.0000003166")
+        self.assertEqual(crypto_amount(Decimal("1.23456789E-16")), "0.000000000000000123456789")
+        self.assertEqual(crypto_amount(100), "100.00000000")
+        self.assertEqual(money(Decimal("123.4567")), "€ 123,4567")
+        self.assertEqual(money(Decimal("1E-16")), "€ 0,0000000000000001")
+        body = transactions([], [], "Controleer invoer", {"asset_amount": "3.166E-7", "fee_eur": "1E-8"})
+        self.assertIn('value="0.0000003166"', body)
+        self.assertIn('value="0.00000001"', body)
+        with TemporaryDirectory() as temp_dir, patch.object(db, "DB_PATH", Path(temp_dir) / "test.sqlite3"):
+            db.init_db()
+            db.create_asset({"symbol": "TEST", "name": "Test", "kraken_pair": "TESTEUR", "manual_price": "0.000000000123456789123456789"})
+            self.assertEqual(db.get_asset("TEST")["manual_price"], Decimal("0.000000000123456789123456789"))
+            body = settings_page({**db.get_settings(), "opening_cash": "1E-8"}, db.get_assets())
+            self.assertIn('value="0.00000001"', body)
+            self.assertIn('value="0.000000000123456789123456789"', body)
+
+    def test_dust_sweep_multiple_assets_and_fees(self):
+        rows, metrics = build_ledger([
+            tx(1, "2026-09-10", "USD", "Storting", "0.0085", cost="0.008"),
+            tx(2, "2026-09-10", "ETH", "Storting", "0.0000013466", cost="0.004"),
+            tx(3, "2026-09-11", "USD", "Dust sweeping", "0.0085", "0.007", "0.0002"),
+            tx(4, "2026-09-11", "ETH", "Dust sweeping", "0.0000013466", "0.0028", "0.0001"),
+        ], 0, {"USD": 1, "ETH": 3000})
+        self.assertEqual(metrics["cash"], Decimal("0.0098"))
+        self.assertEqual(metrics["external"], Decimal("0.012"))
+        self.assertEqual(metrics["realized"], Decimal("-0.0022"))
+        for asset in metrics["assets"].values():
+            self.assertEqual(asset["balance"], 0)
+            self.assertEqual(asset["cost_basis"], 0)
+        self.assertTrue(all(not row["control"] for row in rows))
+
+    def test_dust_sweep_form_precision_and_validation(self):
+        with TemporaryDirectory() as temp_dir, patch.object(
+            db, "DB_PATH", Path(temp_dir) / "test.sqlite3"
+        ):
+            db.init_db()
+            values = tx(0, "2026-09-11", "BTC", "Dust sweeping", "0.0000013466", "0.0098", "0.0003")
+            values.pop("id")
+            status, _ = self.post("/transactions", values)
+            self.assertEqual(status, "303 See Other")
+            saved = dict(db.get_transactions()[-1])
+            self.assertEqual(Decimal(str(saved["eur_gross"])), Decimal("0.0098"))
+            self.assertEqual(Decimal(str(saved["fee_eur"])), Decimal("0.0003"))
+            status, body = self.get("/transactions")
+            self.assertIn("€ 0,0098", body)
+            self.assertIn("€ 0,0003", body)
+            self.assertIn('step="any" min="0" name="eur_gross"', body)
+            status, _ = self.post("/transactions", {**values, "eur_gross": "0"})
+            self.assertEqual(status, "303 See Other")
+            status, _ = self.post("/transactions", {**values, "asset_amount": "100"})
+            self.assertEqual(status, "422 Unprocessable Entity")
+            status, _ = self.post("/transactions", {**values, "eur_gross": "-0.01"})
+            self.assertEqual(status, "422 Unprocessable Entity")
+
     def post(self, path, data):
         payload = urllib.parse.urlencode(data).encode()
         environ = {}
@@ -222,7 +325,7 @@ class CryptoAdminTest(unittest.TestCase):
                 self.assertTrue(database.with_name("crypto_admin.pre_multi_asset.sqlite3").exists())
                 self.assertEqual(rows[0]["asset"], "BTC")
                 self.assertEqual(rows[0]["type"], "Inkoop")
-                self.assertEqual(rows[0]["asset_amount"], 0.001)
+                self.assertEqual(rows[0]["asset_amount"], Decimal("0.001"))
                 self.assertEqual(rows[1]["asset"], "EUR")
                 self.assertEqual(db.get_settings()["price_BTC"], "56000")
 

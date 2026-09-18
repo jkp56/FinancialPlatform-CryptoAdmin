@@ -1,10 +1,12 @@
 from decimal import Decimal, getcontext
 
-getcontext().prec = 28
+# Extra guard digits for cost-basis divisions and totals of small quantities.
+getcontext().prec = 60
 D = Decimal
 
 CRYPTO_IN = {"Inkoop", "Storting", "Reward"}
-CRYPTO_OUT = {"Verkoop", "Opname"}
+SALES = {"Verkoop", "Dust sweeping"}
+CRYPTO_OUT = SALES | {"Opname"}
 CRYPTO_ACTIONS = CRYPTO_IN | CRYPTO_OUT
 
 
@@ -60,18 +62,20 @@ def build_ledger(transactions, opening_cash, current_prices):
             cost_basis_before = state["cost_basis"]
             avg_before = cost_basis_before / balance_before if balance_before else D("0")
             purchase_net = gross - fee if kind == "Inkoop" else D("0")
-            sale_gross = gross + fee if kind == "Verkoop" else D("0")
+            sale_gross = gross + fee if kind in SALES else D("0")
             asset_delta = amount if kind in CRYPTO_IN else -amount
-            eur_delta = -gross if kind == "Inkoop" else (gross if kind == "Verkoop" else D("0"))
+            eur_delta = -gross if kind == "Inkoop" else (gross if kind in SALES else D("0"))
             added = gross if kind == "Inkoop" else (transferred if kind == "Storting" else D("0"))
             removed = amount * avg_before if kind in CRYPTO_OUT else D("0")
-            sale_net = gross if kind == "Verkoop" else D("0")
-            pnl_tx = sale_net - removed if kind == "Verkoop" else D("0")
+            if kind in CRYPTO_OUT and amount == balance_before:
+                removed = cost_basis_before
+            sale_net = gross if kind in SALES else D("0")
+            pnl_tx = sale_net - removed if kind in SALES else D("0")
             reference = (
                 purchase_net / amount
                 if kind == "Inkoop" and amount
                 else sale_gross / amount
-                if kind == "Verkoop" and amount
+                if kind in SALES and amount
                 else transferred / amount
                 if kind == "Storting" and amount and transferred
                 else state["previous_reference"]
@@ -83,6 +87,8 @@ def build_ledger(transactions, opening_cash, current_prices):
                 control = "Kostbasis nodig"
             elif kind == "Reward" and amount <= 0:
                 control = "Controleer reward"
+            elif kind == "Dust sweeping" and (amount <= 0 or gross < 0):
+                control = f"Controleer {asset}/EUR"
             elif kind in {"Inkoop", "Verkoop"} and (amount <= 0 or gross <= 0):
                 control = f"Controleer {asset}/EUR"
             elif kind == "Inkoop" and fee >= gross:
@@ -96,7 +102,7 @@ def build_ledger(transactions, opening_cash, current_prices):
             state["realized"] += pnl_tx
             if kind == "Inkoop":
                 state["net_invested"] += gross
-            elif kind == "Verkoop":
+            elif kind in SALES:
                 state["net_invested"] -= gross
             elif kind == "Storting":
                 state["net_invested"] += transferred

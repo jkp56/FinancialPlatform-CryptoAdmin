@@ -10,12 +10,12 @@ function fields() {
     if (!type) return;
     const transactionType = type.value;
     const selectedAsset = asset?.value || 'BTC';
-    const isCrypto = ['Inkoop', 'Verkoop', 'Storting', 'Opname', 'Reward'].includes(transactionType);
+    const isCrypto = ['Inkoop', 'Verkoop', 'Dust sweeping', 'Storting', 'Opname', 'Reward'].includes(transactionType);
     const show = {
         asset: isCrypto,
         amount: isCrypto,
-        eur: ['Inkoop', 'Verkoop', 'EUR Storting', 'EUR Opname'].includes(transactionType),
-        fee: ['Inkoop', 'Verkoop'].includes(transactionType),
+        eur: ['Inkoop', 'Verkoop', 'Dust sweeping', 'EUR Storting', 'EUR Opname'].includes(transactionType),
+        fee: ['Inkoop', 'Verkoop', 'Dust sweeping'].includes(transactionType),
         cost: transactionType === 'Storting'
     };
     document.querySelectorAll('[data-field]').forEach(element => {
@@ -27,12 +27,12 @@ function fields() {
     if (eurLabel) {
         eurLabel.textContent = transactionType === 'Inkoop'
             ? 'Totaalbedrag EUR (incl. kosten)'
-            : transactionType === 'Verkoop' ? 'Netto-opbrengst EUR (na kosten)' : 'Bedrag EUR';
+            : ['Verkoop', 'Dust sweeping'].includes(transactionType) ? 'Netto-opbrengst EUR (na kosten)' : 'Bedrag EUR';
     }
     if (eurHelp) {
         eurHelp.textContent = transactionType === 'Inkoop'
             ? `Handelswaarde excl. kosten = totaalbedrag − kosten. Kostbasis incl. kosten = totaalbedrag.`
-            : transactionType === 'Verkoop' ? `Bruto handelswaarde = netto-opbrengst + kosten. Kas en PnL gebruiken de netto-opbrengst.` : '';
+            : ['Verkoop', 'Dust sweeping'].includes(transactionType) ? `Bruto handelswaarde = netto-opbrengst + kosten. Kas en PnL gebruiken de netto-opbrengst. Bij een sweep met meerdere assets: vul alleen het aandeel van deze asset in; boek de EUR-ontvangst niet opnieuw.` : '';
     }
 }
 
