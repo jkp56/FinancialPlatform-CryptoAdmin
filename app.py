@@ -34,8 +34,7 @@ def form_value(value):
 
 def money(value):
     amount = Decimal(str(value or 0))
-    precision = max(2, len(decimal_text(amount).partition(".")[2].rstrip("0")))
-    return f"€ {amount:,.{precision}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"€ {amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def signed_money(value):

@@ -76,7 +76,7 @@ Bij **Verkoop** is het EUR-bedrag de netto bijschrijving na kosten. De bruto ver
 
 Een cryptostorting vereist de oorspronkelijke historische kostbasis. Rewards krijgen in deze administratie kostbasis nul.
 
-Bij **Dust sweeping** worden restsaldi naar EUR omgezet. Vul per ingeleverde asset de hoeveelheid, de netto EUR-opbrengst en de kosten in. Dit verlaagt de hoeveelheid en gemiddelde kostbasis, verhoogt het EUR-saldo met de netto-opbrengst en verwerkt het verschil als gerealiseerd resultaat. Een netto-opbrengst van nul is toegestaan. Bedragen kleiner dan een cent kunnen worden ingevoerd en worden met extra decimalen weergegeven.
+Bij **Dust sweeping** worden restsaldi naar EUR omgezet. Vul per ingeleverde asset de hoeveelheid, de netto EUR-opbrengst en de kosten in. Dit verlaagt de hoeveelheid en gemiddelde kostbasis, verhoogt het EUR-saldo met de netto-opbrengst en verwerkt het verschil als gerealiseerd resultaat. Een netto-opbrengst van nul is toegestaan. Bedragen kleiner dan een cent kunnen exact worden ingevoerd; de EUR-weergave gebruikt twee decimalen.
 
 Bij een sweep met meerdere assets verdeel je de netto-opbrengst en kosten over de betrokken assets, bijvoorbeeld naar verhouding van hun absolute `amountusd` in de Kraken-export. Zorg dat de deelbedragen exact optellen tot de gezamenlijke opbrengst en kosten. Gebruik dezelfde Kraken-`refid` in de omschrijvingen. Boek de EUR-ontvangst niet daarnaast als storting: dit zou het kassaldo en de externe inleg onterecht verhogen. Een niet-EUR-valuta zoals USD moet eerst als asset met zijn eigen saldo en historische EUR-kostbasis zijn vastgelegd.
 
@@ -97,7 +97,7 @@ Gezamenlijke PnL is de som van BTC- en ETH-PnL. Gezamenlijk rendement is deze Pn
 
 ## Data en migratie
 
-Hoeveelheden, EUR-bedragen en handmatige koersen worden als decimale tekst opgeslagen, zodat SQLite geen decimalen door binaire afronding verliest. Bewerkvelden gebruiken gewone decimale notatie (bijvoorbeeld `0.0000003166`, zonder E-notatie). Hoeveelheden en bedragen worden zonder vaste afkapgrens weergegeven; percentages en grafiekassen blijven voor leesbaarheid afgerond. Berekeningen gebruiken 60 significante cijfers; delingen zoals een gemiddelde kostprijs kunnen afronding vereisen.
+Hoeveelheden, EUR-bedragen en handmatige koersen worden als decimale tekst opgeslagen, zodat SQLite geen decimalen door binaire afronding verliest. Bewerkvelden gebruiken gewone decimale notatie (bijvoorbeeld `0.0000003166`, zonder E-notatie). Cryptohoeveelheden worden zonder vaste afkapgrens weergegeven. EUR-bedragen worden in overzichten met twee decimalen weergegeven; opslag, berekeningen en bewerkvelden behouden de volledige precisie. Percentages en grafiekassen blijven voor leesbaarheid afgerond. Berekeningen gebruiken 60 significante cijfers; delingen zoals een gemiddelde kostprijs kunnen afronding vereisen.
 
 Bij het openen van een oudere database worden de numerieke kolommen automatisch omgezet. Vooraf wordt eenmalig een SQLite-back-up met achtervoegsel `.pre_decimal.sqlite3` gemaakt. Reeds eerder verloren precisie kan niet uit de oude database worden hersteld.
 
