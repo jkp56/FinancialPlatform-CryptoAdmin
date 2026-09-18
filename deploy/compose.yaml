@@ -1,3 +1,5 @@
+name: crypto-admin
+
 services:
   crypto-admin:
     build:

@@ -4,6 +4,45 @@ Deze handleiding beschrijft de volledige deployment van **Crypto Admin** vanaf d
 Windows-ontwikkelcomputer naar de Ubuntu-NUC. Volg bij een eerste installatie de
 hoofdstukken in de aangegeven volgorde.
 
+## Eenmalig: Compose-projecten scheiden op de NUC
+
+Elke app heeft een vaste projectnaam in `deploy/compose.yaml`: `crypto-admin`
+en `net-worth-check`. De containernamen, poorten en datamappen blijven gelijk.
+De installatiescripts en normale Compose-commando's nemen deze naam automatisch over.
+
+Bij bestaande containers met projectnaam `deploy` moet eerst de migratie hieronder
+worden uitgevoerd, voordat je weer een normale deployment doet. Alleen de nieuwe
+Compose-bestanden overzetten kan anders een conflict met bestaande containernamen geven.
+
+1. Zet de gewijzigde Compose-bestanden van beide apps op de NUC en zet ook
+   `CryptoAdmin/deploy/migrate-compose-projects.sh` over.
+2. Log in met `ssh intelnuc` en voer uit:
+
+```bash
+sudo bash /opt/apps/crypto-admin/app/deploy/migrate-compose-projects.sh
+```
+
+Het script controleert eerst beide configuraties en migreert de apps één voor één.
+Per app stopt het de container, maakt een gecontroleerde kopie van de volledige
+SQLite-datamap in `/opt/apps/<app>/backups/compose-project-<tijdstip>/data`,
+en bewaart de configuratie en containergegevens in dezelfde afgeschermde back-upmap.
+Containergegevens kunnen instellingen bevatten; deel deze back-ups niet openbaar.
+Daarna maakt het de container opnieuw aan met dezelfde image en datakoppeling,
+controleert de projectnaam en healthcheck, en verwijdert pas dan de oude container.
+Bij een fout na het stoppen start het de oude container weer. Die behoudt projectnaam
+`deploy`; los de fout op en voer hetzelfde script opnieuw uit. Reeds gemigreerde,
+gezonde apps worden overgeslagen. Iedere app is tijdens de migratie kort onbereikbaar.
+
+Gebruik geen `--remove-orphans` of gezamenlijke `down` tijdens deze overgang.
+Het oude netwerk `deploy_default` blijft behouden; verwijderen is niet nodig.
+Controleer na afloop:
+
+```bash
+docker inspect crypto-admin net-worth-check --format '{{.Name}}: project={{index .Config.Labels "com.docker.compose.project"}}, status={{.State.Health.Status}}'
+curl --fail http://127.0.0.1:8010/healthz
+curl --fail http://127.0.0.1:8020/healthz
+```
+
 ## Snelstart
 
 De onderstaande opdrachten met `intelnuc` vereisen eerst deze Windows-configuratie
