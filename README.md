@@ -70,6 +70,8 @@ De ondersteunde transactietypen zijn voor alle beheerde crypto-assets identiek:
 
 Daarnaast zijn EUR-stortingen en EUR-opnames beschikbaar.
 
+Bij **EUR Opname** vul je het totaalbedrag inclusief kosten in. Bij €200 en €1 kosten daalt het Kraken-kassaldo met €200 en ontvang je €199 op de bank. De externe netto-inleg daalt met €199; de €1 kosten verlaagt de gerealiseerde portefeuille-PnL zonder toewijzing aan een coin. Kosten zijn standaard nul en mogen niet hoger zijn dan het totaalbedrag.
+
 Bij **Inkoop** is het EUR-bedrag het totaal inclusief kosten. De cryptoaankoopwaarde is totaal minus fee; kassaldo en kostbasis wijzigen met het volledige totaalbedrag.
 
 Bij **Verkoop** is het EUR-bedrag de netto bijschrijving na kosten. De bruto verkoopwaarde is netto-opbrengst plus fee; het kassaldo stijgt met de netto-opbrengst.
@@ -93,7 +95,7 @@ Voor iedere beheerde crypto-asset worden afzonderlijk bijgehouden:
 
 Coinrendement is totale coin-PnL gedeeld door de netto-inleg in die coin: aankopen en inkomende historische kostbasis, verminderd met netto verkoopopbrengsten en uitgaande kostbasis.
 
-Gezamenlijke PnL is de som van BTC- en ETH-PnL. Gezamenlijk rendement is deze PnL gedeeld door de externe netto-inleg van de portefeuille. Het EUR-kassaldo telt mee in de rekeningwaarde, maar is geen PnL.
+Gezamenlijke PnL is de som van de PnL van alle coins, verminderd met EUR-opnamekosten. Gezamenlijk rendement is deze PnL gedeeld door de externe netto-inleg van de portefeuille. Het EUR-kassaldo telt mee in de rekeningwaarde, maar is geen PnL.
 
 ## Data en migratie
 

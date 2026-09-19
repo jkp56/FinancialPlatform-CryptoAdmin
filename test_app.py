@@ -42,6 +42,43 @@ def tx(
 
 
 class CryptoAdminTest(unittest.TestCase):
+    def test_eur_withdrawal_fee_reconciles_cash_external_and_pnl(self):
+        for fee in ("0", "1", "200"):
+            with self.subTest(fee=fee):
+                rows, metrics = build_ledger([
+                    tx(1, "2026-09-18", "EUR", "EUR Opname", eur="200", fee=fee),
+                    tx(2, "2026-09-19", "BTC", "Reward", amount="1"),
+                ], "300", {"BTC": "10"})
+                self.assertEqual(rows[0]["eur_delta"], Decimal("-200"))
+                self.assertEqual(rows[0]["external_contribution"], Decimal("100") + Decimal(fee))
+                self.assertEqual(rows[0]["pnl_tx"], -Decimal(fee))
+                self.assertEqual(rows[0]["control"], "")
+                self.assertEqual(metrics["cash"], Decimal("100"))
+                self.assertEqual(metrics["realized"], -Decimal(fee))
+                self.assertEqual(metrics["total_pnl"], metrics["account_value"] - metrics["external"])
+                self.assertEqual(rows[-1]["historical_total"], metrics["total_pnl"])
+                self.assertEqual(metrics["assets"]["BTC"]["realized"], 0)
+
+    def test_eur_withdrawal_fee_save_edit_and_validation(self):
+        with TemporaryDirectory() as temp_dir, patch.object(db, "DB_PATH", Path(temp_dir) / "test.sqlite3"):
+            db.init_db()
+            db.create_transaction(tx(0, "2026-09-17", "EUR", "EUR Storting", eur="300"))
+            values = tx(0, "2026-09-18", "EUR", "EUR Opname", eur="200", fee="1")
+            values.pop("id")
+            status, _ = self.post("/transactions", values)
+            self.assertEqual(status, "303 See Other")
+            saved = next(row for row in db.get_transactions() if row["tx_date"] == "2026-09-18")
+            self.assertEqual(saved["fee_eur"], Decimal("1"))
+            values["id"] = str(saved["id"])
+            values["fee_eur"] = "0.5"
+            status, _ = self.post("/transactions", values)
+            self.assertEqual(status, "303 See Other")
+            self.assertEqual(db.get_transaction(saved["id"])["fee_eur"], Decimal("0.5"))
+            for fee in ("201", "-1"):
+                status, _ = self.post("/transactions", {**values, "fee_eur": fee})
+                self.assertEqual(status, "422 Unprocessable Entity")
+                self.assertEqual(db.get_transaction(saved["id"])["fee_eur"], Decimal("0.5"))
+
     def test_existing_numeric_database_migrates_once_with_backup(self):
         with TemporaryDirectory() as temp_dir, patch.object(db, "DB_PATH", Path(temp_dir) / "test.sqlite3"):
             with closing(sqlite3.connect(db.DB_PATH)) as con, con:

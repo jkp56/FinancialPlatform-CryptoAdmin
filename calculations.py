@@ -41,6 +41,7 @@ def build_ledger(transactions, opening_cash, current_prices):
             prices[asset] = D("0")
     states = _asset_state(prices)
     cash = external = dec(opening_cash)
+    cash_realized = D("0")
     rows = []
 
     for tx in transactions:
@@ -118,8 +119,12 @@ def build_ledger(transactions, opening_cash, current_prices):
                 external += gross
             elif kind == "EUR Opname":
                 eur_delta = -gross
-                external -= gross
-                if gross > cash_before:
+                external -= gross - fee
+                pnl_tx = -fee
+                cash_realized -= fee
+                if fee > gross:
+                    control = "Kosten mogen niet hoger zijn dan het totaalbedrag"
+                elif gross > cash_before:
                     control = "Onvoldoende EUR"
 
         cash += eur_delta
@@ -130,7 +135,7 @@ def build_ledger(transactions, opening_cash, current_prices):
             state["balance"] * state["previous_reference"] - state["cost_basis"]
             for state in states.values()
         )
-        realized_total = sum(state["realized"] for state in states.values())
+        realized_total = cash_realized + sum(state["realized"] for state in states.values())
         asset_historical_unrealized = (
             states[asset]["balance"] * states[asset]["previous_reference"]
             - states[asset]["cost_basis"]
@@ -189,7 +194,7 @@ def build_ledger(transactions, opening_cash, current_prices):
         }
 
     market = sum(item["market"] for item in asset_metrics.values())
-    realized = sum(item["realized"] for item in asset_metrics.values())
+    realized = cash_realized + sum(item["realized"] for item in asset_metrics.values())
     unrealized = sum(item["unrealized"] for item in asset_metrics.values())
     total = realized + unrealized
     return rows, {

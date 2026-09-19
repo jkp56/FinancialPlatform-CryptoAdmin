@@ -362,6 +362,11 @@ def transactions(assets, rows, form_error="", draft=None, page_error=""):
 
 METHOD = [
     (
+        "EUR-opname",
+        "Totaalbedrag inclusief kosten.",
+        "Het totaalbedrag verlaagt het Kraken-kassaldo. De bank ontvangt het totaal minus de kosten: bij €200 met €1 kosten is dat €199. Alleen de netto bankontvangst verlaagt de externe inleg; de kosten verlagen de gerealiseerde portefeuille-PnL, zonder toewijzing aan een coin.",
+    ),
+    (
         "Dust sweeping",
         "Kleine restsaldi omzetten naar EUR.",
         "Boek per ingeleverde asset een dust sweeping met de hoeveelheid, het eigen aandeel in de netto EUR-opbrengst en de kosten. De kostbasis wordt afgeboekt en het verschil met de netto-opbrengst is gerealiseerde PnL. Verdeel bij meerdere assets de opbrengst en kosten; boek de EUR-ontvangst niet nogmaals als storting. Bedragen kleiner dan een cent en een netto-opbrengst van nul zijn toegestaan.",
@@ -399,7 +404,7 @@ METHOD = [
     (
         "Gezamenlijk rendement",
         "Alle crypto-assets en EUR als één portefeuille.",
-        "Totale PnL is de som van gerealiseerde en ongerealiseerde PnL van alle assets. Totaal rendement is deze PnL gedeeld door de externe netto-inleg. Kassaldo telt mee in de rekeningwaarde, maar niet als PnL.",
+        "Totale PnL is de som van gerealiseerde en ongerealiseerde PnL van alle assets, verminderd met EUR-opnamekosten. Totaal rendement is deze PnL gedeeld door de externe netto-inleg. Kassaldo telt mee in de rekeningwaarde, maar niet als PnL.",
     ),
     (
         "Koersen en herberekening",
@@ -586,7 +591,7 @@ def transaction_values(data):
         if kind in {"Inkoop", "Verkoop", "Dust sweeping", "EUR Storting", "EUR Opname"}
         else Decimal("0")
     )
-    fee_eur = decimal_field(data, "fee_eur") if kind in {"Inkoop", "Verkoop", "Dust sweeping"} else Decimal("0")
+    fee_eur = decimal_field(data, "fee_eur") if kind in {"Inkoop", "Verkoop", "Dust sweeping", "EUR Opname"} else Decimal("0")
     transferred = (
         decimal_field(data, "transferred_cost_basis_eur")
         if kind == "Storting"
@@ -633,6 +638,8 @@ def transaction_validation_error(values, transaction_id=""):
         return f"Vul de historische kostbasis van de gestorte {asset} in."
     if kind == "Inkoop" and fee >= gross:
         return "De kosten moeten lager zijn dan het totaalbedrag."
+    if kind == "EUR Opname" and fee > gross:
+        return "De kosten mogen niet hoger zijn dan het totaalbedrag."
     existing = [dict(row) for row in db.get_transactions()]
     if transaction_id:
         try:

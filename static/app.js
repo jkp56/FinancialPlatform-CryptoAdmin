@@ -15,7 +15,7 @@ function fields() {
         asset: isCrypto,
         amount: isCrypto,
         eur: ['Inkoop', 'Verkoop', 'Dust sweeping', 'EUR Storting', 'EUR Opname'].includes(transactionType),
-        fee: ['Inkoop', 'Verkoop', 'Dust sweeping'].includes(transactionType),
+        fee: ['Inkoop', 'Verkoop', 'Dust sweeping', 'EUR Opname'].includes(transactionType),
         cost: transactionType === 'Storting'
     };
     document.querySelectorAll('[data-field]').forEach(element => {
@@ -25,12 +25,14 @@ function fields() {
     });
     if (amountLabel) amountLabel.textContent = `${selectedAsset} hoeveelheid`;
     if (eurLabel) {
-        eurLabel.textContent = transactionType === 'Inkoop'
+        eurLabel.textContent = ['Inkoop', 'EUR Opname'].includes(transactionType)
             ? 'Totaalbedrag EUR (incl. kosten)'
             : ['Verkoop', 'Dust sweeping'].includes(transactionType) ? 'Netto-opbrengst EUR (na kosten)' : 'Bedrag EUR';
     }
     if (eurHelp) {
-        eurHelp.textContent = transactionType === 'Inkoop'
+        eurHelp.textContent = transactionType === 'EUR Opname'
+            ? `Het totaalbedrag wordt van Kraken afgeschreven. Je ontvangt het totaalbedrag minus de kosten op je bankrekening. Bij €200 en €1 kosten ontvang je €199.`
+            : transactionType === 'Inkoop'
             ? `Handelswaarde excl. kosten = totaalbedrag − kosten. Kostbasis incl. kosten = totaalbedrag.`
             : ['Verkoop', 'Dust sweeping'].includes(transactionType) ? `Bruto handelswaarde = netto-opbrengst + kosten. Kas en PnL gebruiken de netto-opbrengst. Bij een sweep met meerdere assets: vul alleen het aandeel van deze asset in; boek de EUR-ontvangst niet opnieuw.` : '';
     }
