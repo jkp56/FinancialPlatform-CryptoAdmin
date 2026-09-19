@@ -1,5 +1,7 @@
 # Crypto Rendement
 
+De huidige versie is **1.0.0** en staat op elke pagina onder de appnaam, ook op mobiel. De centrale versie staat in `APP_VERSION` in `app.py`. Verhoog die bij iedere release: het laatste nummer voor foutcorrecties (1.0.1), het middelste voor nieuwe functies (1.1.0) en het eerste voor incompatibele wijzigingen (2.0.0). De versie wordt ook gebruikt om na een update nieuwe stylesheets en JavaScript op te halen. Na kopiëren naar de NUC moet de container opnieuw worden gebouwd met `up -d --build`.
+
 Lokale Python-webapp voor een Kraken-portefeuille met dynamisch beheerde crypto-assets en EUR. De app houdt transacties, kassaldo, gemiddelde kostprijs en rendement per coin én voor de gezamenlijke portefeuille bij. BTC en ETH zijn standaard aanwezig; aanvullende assets beheer je via **Instellingen**.
 
 De volledige, eenduidige procedure voor installatie en updates vanaf Windows

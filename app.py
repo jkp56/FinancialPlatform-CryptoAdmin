@@ -15,6 +15,7 @@ import db
 from calculations import CRYPTO_ACTIONS, build_ledger
 
 ROOT = Path(__file__).parent
+APP_VERSION = "1.0.0"
 TYPES = ["Inkoop", "Verkoop", "Dust sweeping", "Storting", "Opname", "Reward", "EUR Storting", "EUR Opname"]
 
 
@@ -173,15 +174,15 @@ def layout(title, active, body, assets=()):
     return f"""<!doctype html><html lang="nl"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{esc(title)} · Crypto Rendement</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link rel="stylesheet" href="/static/metric-breakdown.css">
-    <link rel="stylesheet" href="/static/crud.css">
-    <link rel="stylesheet" href="/static/compact.css">
-    <link rel="stylesheet" href="/static/method.css"></head>
+    <link rel="stylesheet" href="/static/styles.css?v={APP_VERSION}">
+    <link rel="stylesheet" href="/static/metric-breakdown.css?v={APP_VERSION}">
+    <link rel="stylesheet" href="/static/crud.css?v={APP_VERSION}">
+    <link rel="stylesheet" href="/static/compact.css?v={APP_VERSION}">
+    <link rel="stylesheet" href="/static/method.css?v={APP_VERSION}"></head>
     <body><aside><a class="brand" href="/"><span class="coin-mark">₿Ξ</span><b>Crypto Rendement</b>
-    <small>Kraken portfolio</small></a><nav>{links}</nav>
+    <small>Kraken portfolio · v{APP_VERSION}</small></a><nav>{links}</nav>
     <div class="aside-foot">Gemiddelde kostprijsmethode<br><span>{" · ".join([*(item["symbol"] for item in assets), "EUR"])}</span></div></aside>
-    <main class="{active}-page">{body}</main><script src="/static/app.js"></script></body></html>"""
+    <main class="{active}-page">{body}</main><script src="/static/app.js?v={APP_VERSION}"></script></body></html>"""
 
 
 def dashboard(settings, assets, rows, metrics):
